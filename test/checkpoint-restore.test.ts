@@ -41,6 +41,9 @@ async function openDialog() {
   await act(async () => {
     root.render(createElement(ProjectCheckpointDialog, { project, onClose: vi.fn(), onRecovered: recovered }));
   });
+  // The history is loaded in an effect after the first render; wait for it
+  // rather than asserting against the transient loading state.
+  await vi.waitFor(() => expect(host.textContent).not.toContain("Loading recovery history"));
 }
 
 async function clickLabel(part: string) {

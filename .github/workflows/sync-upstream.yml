@@ -1,0 +1,115 @@
+# Initial baseline (2026-10-13): downstream and upstream main were both
+# aa93b0790624104f14f0135b76e5144e7b6f2046.
+name: Sync upstream main
+
+on:
+  schedule:
+    # Every three hours (UTC); offset from the top of the hour to reduce delays.
+    - cron: '17 */3 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: upstream-main-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out downstream main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Fetch upstream main
+        id: fetch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/WhiteTowerAI/ohmygame.git
+          git fetch --no-tags upstream main
+          echo "downstream_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "upstream_sha=$(git rev-parse refs/remotes/upstream/main)" >> "$GITHUB_OUTPUT"
+          echo "Downstream main: $(git rev-parse HEAD)"
+          echo "Upstream main: $(git rev-parse refs/remotes/upstream/main)"
+
+      - name: Merge upstream without overwriting downstream changes
+        id: merge
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo 'updated=false' >> "$GITHUB_OUTPUT"
+            echo 'No new upstream changes.'
+            exit 0
+          fi
+          if ! git merge-base HEAD upstream/main >/dev/null; then
+            echo '::error::Unrelated histories; refusing to replace downstream main.'
+            exit 1
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          if ! git merge --no-ff --no-edit upstream/main; then
+            git status --short
+            git merge --abort || true
+            echo '::error::Upstream merge has conflicts. Main was left unchanged.'
+            exit 1
+          fi
+          echo 'updated=true' >> "$GITHUB_OUTPUT"
+
+      - name: Set up Node.js
+        if: steps.merge.outputs.updated == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+
+      - name: Set up Bun
+        if: steps.merge.outputs.updated == 'true'
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.2'
+
+      - name: Install dependencies
+        if: steps.merge.outputs.updated == 'true'
+        run: bun install --frozen-lockfile
+
+      - name: Run repository CI checks
+        if: steps.merge.outputs.updated == 'true'
+        run: |
+          set -euo pipefail
+          bun run prepare:preinstalled-plugins
+          bun run typecheck
+          bun run test
+          bun run test:node-runtime
+
+      - name: Push verified merge to downstream main
+        if: steps.merge.outputs.updated == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh auth setup-git
+          # Non-force push: fail instead of overwriting someone else's new commits.
+          git push origin HEAD:refs/heads/main
+
+      - name: Record result in workflow run
+        if: always()
+        env:
+          DOWNSTREAM_SHA: ${{ steps.fetch.outputs.downstream_sha }}
+          UPSTREAM_SHA: ${{ steps.fetch.outputs.upstream_sha }}
+          UPDATED: ${{ steps.merge.outputs.updated }}
+          RUN_STATUS: ${{ job.status }}
+        run: |
+          {
+            echo '### Upstream synchronization'
+            echo "- Downstream before: \`${DOWNSTREAM_SHA:-unknown}\`"
+            echo "- Upstream checked: \`${UPSTREAM_SHA:-unknown}\`"
+            echo "- Changes merged locally: \`${UPDATED:-unknown}\`"
+            echo "- Job status: \`${RUN_STATUS}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

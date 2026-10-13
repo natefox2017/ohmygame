@@ -63,8 +63,8 @@ export class ProviderImages implements ImageGenerator {
       runtime ? this.#openRouterEntry(runtime, signal) : undefined,
       runtime ? this.#openAIEntry(runtime, signal) : undefined,
       this.#seedreamEntry(),
-      this.#codexEntry(),
       ...custom.map((provider) => catalogEntry(provider.id, provider.name, () => this.#customModels(runtime!, provider, signal), "Choose and enable image models in Models.")),
+      this.#codexEntry(),
     ]);
     const connected = entries.filter((entry): entry is CatalogEntry => Boolean(entry));
     const models = connected.flatMap((entry) => entry.models);

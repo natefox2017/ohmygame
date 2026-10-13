@@ -2069,7 +2069,7 @@ export function createApp(options: AppOptions = {}) {
   app.post("/settings/models/providers/codex-app-server/login", async (_request, reply) => {
     try {
       await codexImages.startLogin();
-      return reply.code(202).send(await codexImages.connection());
+      return reply.code(202).send({ ...await codexImages.connection(), enabled: providerEnabled("codex-app-server") });
     } catch (cause) {
       if (cause instanceof ImageGenerationError) return reply.code(cause.statusCode).send({ error: cause.message });
       throw cause;

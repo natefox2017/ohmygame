@@ -1,4 +1,4 @@
-import { copyFile, link, lstat, mkdir, readdir, rename, rm, statfs, writeFile } from "node:fs/promises";
+import { copyFile, link, lstat, mkdir, readFile, readdir, rename, rm, statfs, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { ProjectState } from "../shared/contracts.js";
 import { checkpointDirectory } from "./checkpoints.js";
@@ -36,6 +36,13 @@ async function exists(file: string): Promise<boolean> {
 export async function recoverCheckpointRotation(project: Pick<ProjectState, "workspacePath" | "storagePath">): Promise<void> {
   const { active, next, previous } = rotationPaths(project);
   if (!(await exists(active)) && await exists(previous)) await rename(previous, active);
+  if (await exists(active) && await exists(previous)) {
+    // Retain the last known-good archive if the replacement is incomplete.
+    const ledger = await readFile(path.join(active, "agent-turns.json"), "utf8").catch(() => "");
+    if (!ledger.includes('"version": 1') || !(await exists(path.join(active, "HEAD")))) {
+      throw new Error("Incomplete checkpoint rotation: previous recovery store was preserved");
+    }
+  }
   if (await exists(active)) {
     if (await exists(next)) await rm(next, { recursive: true, force: true });
     if (await exists(previous)) await rm(previous, { recursive: true, force: true });

@@ -20,6 +20,8 @@ export class ProviderModelSettingsStore {
   readonly #modelsPath: string;
   #hidden: Record<string, string[]> = {};
   #disabled: string[] = [];
+  // Subscription image generation requires a deliberate opt-in from Settings.
+  #codexImagesEnabled = false;
   #customProviders: CustomProviderRegistry = {};
   #nativeModels3D: Partial<Record<Native3DProviderId, Model3DDefinition[]>> = {};
   #defaultImageModel?: ModelRef;
@@ -35,12 +37,14 @@ export class ProviderModelSettingsStore {
   async load(): Promise<void> {
     const text = await readOptional(this.#preferencesPath);
     if (!text) return;
-    const stored = JSON.parse(text) as { version?: unknown; hidden?: unknown; disabled?: unknown; customProviders?: unknown; nativeModels3D?: unknown; defaultImageModel?: unknown; defaultVideoModel?: unknown; defaultModel3D?: unknown };
+    const stored = JSON.parse(text) as { version?: unknown; hidden?: unknown; disabled?: unknown; customProviders?: unknown; nativeModels3D?: unknown; defaultImageModel?: unknown; defaultVideoModel?: unknown; defaultModel3D?: unknown; codexImagesEnabled?: unknown };
     if (stored.version !== 1 || !isObject(stored.hidden) || Object.values(stored.hidden).some((ids) => !Array.isArray(ids) || ids.some((id) => typeof id !== "string"))) throw new Error("Invalid model visibility settings");
     this.#hidden = stored.hidden as Record<string, string[]>;
     if (stored.disabled !== undefined && (!Array.isArray(stored.disabled) || stored.disabled.some((id) => typeof id !== "string"))) throw new Error("Invalid disabled providers");
     if (stored.customProviders !== undefined && (!isObject(stored.customProviders) || Object.values(stored.customProviders).some((item) => !isObject(item) || !["api_key", "none"].includes(String(item.authentication))))) throw new Error("Invalid custom providers");
     this.#disabled = (stored.disabled ?? []) as string[];
+    if (stored.codexImagesEnabled !== undefined && typeof stored.codexImagesEnabled !== "boolean") throw new Error("Invalid Codex image provider preference");
+    this.#codexImagesEnabled = stored.codexImagesEnabled === true;
     this.#customProviders = (stored.customProviders ?? {}) as CustomProviderRegistry;
     if (stored.nativeModels3D !== undefined) {
       if (!isObject(stored.nativeModels3D)) throw new Error("Invalid native 3D models");
@@ -66,7 +70,7 @@ export class ProviderModelSettingsStore {
     }
   }
 
-  isEnabled(provider: string): boolean { return !this.#disabled.includes(provider); }
+  isEnabled(provider: string): boolean { return provider === "codex-app-server" ? this.#codexImagesEnabled : !this.#disabled.includes(provider); }
   isCustom(provider: string): boolean { return Object.hasOwn(this.#customProviders, provider); }
 
   models3D(provider: Native3DProviderId): Model3DDefinition[] {
@@ -127,9 +131,12 @@ export class ProviderModelSettingsStore {
   setEnabled(provider: string | readonly string[], enabled: boolean): Promise<void> {
     return this.#enqueue(async () => {
       const disabled = new Set(this.#disabled);
-      for (const id of typeof provider === "string" ? [provider] : provider) enabled ? disabled.delete(id) : disabled.add(id);
-      await this.#writePreferences({ disabled: [...disabled] });
+      const ids = typeof provider === "string" ? [provider] : provider;
+      for (const id of ids) if (id !== "codex-app-server") enabled ? disabled.delete(id) : disabled.add(id);
+      const codexImagesEnabled = ids.includes("codex-app-server") ? enabled : this.#codexImagesEnabled;
+      await this.#writePreferences({ disabled: [...disabled], codexImagesEnabled });
       this.#disabled = [...disabled];
+      this.#codexImagesEnabled = codexImagesEnabled;
     });
   }
 
@@ -285,7 +292,7 @@ export class ProviderModelSettingsStore {
   }
 
   #preferences(overrides: JsonObject = {}): string {
-    return `${JSON.stringify({ version: 1, hidden: this.#hidden, disabled: this.#disabled, customProviders: this.#customProviders, nativeModels3D: this.#nativeModels3D, defaultImageModel: this.#defaultImageModel, defaultVideoModel: this.#defaultVideoModel, defaultModel3D: this.#defaultModel3D, ...overrides }, null, 2)}\n`;
+    return `${JSON.stringify({ version: 1, hidden: this.#hidden, disabled: this.#disabled, codexImagesEnabled: this.#codexImagesEnabled, customProviders: this.#customProviders, nativeModels3D: this.#nativeModels3D, defaultImageModel: this.#defaultImageModel, defaultVideoModel: this.#defaultVideoModel, defaultModel3D: this.#defaultModel3D, ...overrides }, null, 2)}\n`;
   }
 
   #writePreferences(overrides: JsonObject): Promise<void> {

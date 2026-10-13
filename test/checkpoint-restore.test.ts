@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import path from "node:path";
 import { act, createElement } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -9,8 +10,11 @@ const api = vi.hoisted(() => ({
   undoProjectCheckpoint: vi.fn(),
   restoreProjectCheckpoint: vi.fn(),
 }));
-vi.mock("../src/renderer/api.js", () => api);
-import { ProjectCheckpointDialog } from "../src/renderer/checkpoint-restore.js";
+// Renderer imports the .js specifier, but Vitest resolves the source .ts module.
+// Match the existing project-settings dialog test: mock that resolved path
+// before dynamically importing the component, so no real API fetch escapes.
+vi.doMock(path.resolve("src/renderer/api.ts"), () => api);
+const { ProjectCheckpointDialog } = await import("../src/renderer/checkpoint-restore.js");
 
 const project = { id: "00000000-0000-4000-8000-000000000000", name: "Test game" } as ProjectState;
 let host: HTMLDivElement;

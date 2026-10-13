@@ -77,11 +77,13 @@ export class AgentCheckpoints {
       const entry = ledger.turns.find((turn) => turn.turnId === turnId && turn.after);
       if (!entry?.after) throw new Error("Completed Agent checkpoint not found");
       if (await this.store.unfinished(project)) throw new Error("Recover the interrupted checkpoint operation first");
+      // A recovery itself must also preserve the complete current state.
+      await assertCheckpointCapacity(project, this.maxBytes);
       // With no override, a later user edit makes the undo fail atomically.
       const result = await this.store.undo(project, { before: entry.before, after: entry.after });
       ledger.recoveries.push({ commit: result.previous, createdAt: new Date().toISOString() });
       await this.#write(project, ledger);
-      return result;
+      return { ...result, previous: await this.#trimRecoveries(project, ledger, result.previous) };
     });
   }
 
@@ -94,10 +96,11 @@ export class AgentCheckpoints {
         || ledger.recoveries.some((recovery) => recovery.commit === commit)
         || unfinished === commit;
       if (!known) throw new Error("Checkpoint is not recorded for this project");
+      await assertCheckpointCapacity(project, this.maxBytes);
       const result = await this.store.restore(project, commit);
       ledger.recoveries.push({ commit: result.previous, createdAt: new Date().toISOString() });
       await this.#write(project, ledger);
-      return result;
+      return { ...result, previous: await this.#trimRecoveries(project, ledger, result.previous) };
     });
   }
 
@@ -125,6 +128,19 @@ export class AgentCheckpoints {
         }
       }
       throw initialError;
+    }
+  }
+
+  /** Bound recovery-only use as well as Agent turn history. */
+  async #trimRecoveries(project: ProjectState, ledger: CheckpointLedger, previous: string): Promise<string> {
+    if (ledger.recoveries.length <= 4) return previous;
+    // A completed restore must remain successful even if optional compaction
+    // fails: the uncompressed history is still complete on disk.
+    try {
+      const trimmed = await compactCheckpointHistory(project, ledger);
+      return trimmed.recoveries.at(-1)?.commit ?? previous;
+    } catch {
+      return previous;
     }
   }
 

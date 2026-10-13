@@ -20,6 +20,7 @@ import {
   type ImageModelRef,
   type ModelAuthEvent,
   type ModelAuthMethod,
+  type CodexImageConnectionStatus,
   type ModelProviderEndpointSettings,
   type ProviderModelSettings,
   type Model3DDefinition,

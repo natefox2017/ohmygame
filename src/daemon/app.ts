@@ -26,7 +26,7 @@ import { AgentManager, conversationItems, createPiSession, loadPiSkillCatalog, l
 import { createAgentTools, projectPiToolNames } from "./agent-tools.js";
 import { ConversationManager, type StoredConversation } from "./conversations.js";
 import { AgentCheckpoints } from "./agent-checkpoints.js";
-import { CheckpointConflictError } from "./checkpoints.js";
+import { CheckpointConflictError, CheckpointIncompleteError } from "./checkpoints.js";
 import { ConversationImageStore } from "./conversation-images.js";
 import { OwnedPlaytestDriver } from "./owned-playtest.js";
 import { generateCreativeText, generateDesignDocumentMarkdown, generateDesignTable } from "./text-generation.js";
@@ -1492,15 +1492,23 @@ export function createApp(options: AppOptions = {}) {
       throw new CheckpointConflictError(["An Agent, generation job or workspace edit is still active"]);
     }
     restoringProjects.add(project.id);
+    let incomplete = false;
     try {
       await previews.stop(project, "settings");
       const restored = await action();
       await projects.touch(project.id);
       agents.invalidateProjectSessions(project.id);
-      void previews.automatic(project, true).catch(() => undefined);
       return restored;
+    } catch (cause) {
+      // An interrupted, partly rolled-back workspace is not safe to preview.
+      incomplete = cause instanceof CheckpointIncompleteError;
+      throw cause;
     } finally {
       restoringProjects.delete(project.id);
+      // Explicitly allow automatic restart when an editor lease exists. Using
+      // changedOnly=true here meant a successful restore could leave a stopped
+      // preview indefinitely because its "dirty" flag was already cleared.
+      if (!incomplete) void previews.automatic(project).catch(() => undefined);
     }
   };
 

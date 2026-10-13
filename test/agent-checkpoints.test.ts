@@ -82,6 +82,23 @@ describe("AgentCheckpoints", () => {
     await writeFile(file, '{"version":1,"turns":"invalid"}');
     await expect(new AgentCheckpoints().before(project, "c", "t")).rejects.toThrow("damaged");
   });
+  it("does not silently recreate a lost ledger over previously stored snapshots", async () => {
+    const { project, file } = await fixture();
+    const checkpoints = new AgentCheckpoints();
+    await checkpoints.before(project, "conversation", "turn-1");
+    await writeFile(file, "version two\n");
+    await checkpoints.after(project, "turn-1");
+    const ledger = path.join(project.storagePath!, "checkpoints", "agent-turns.json");
+    const original = await readFile(ledger, "utf8");
+    expect(original).toContain("turn-1");
+    await rm(ledger);
+
+    await expect(new AgentCheckpoints().before(project, "conversation", "turn-2"))
+      .rejects.toThrow("history is missing while snapshots still exist");
+    expect(await readFile(file, "utf8")).toBe("version two\n");
+    await expect(readFile(ledger)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("compacts old snapshots while preserving the 20 latest turns and reversible recovery", async () => {
     const { project, file } = await fixture();
     const checkpoints = new AgentCheckpoints();

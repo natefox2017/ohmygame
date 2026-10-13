@@ -14,9 +14,10 @@ afterEach(async () => {
   }));
 });
 
-async function project() {
+async function project(preHandler?: (request: { method: string; url: string }) => Promise<void>) {
   const folder = await mkdtemp(path.join(tmpdir(), "ohmygame-checkpoint-api-"));
   const app = createApp({ dataDirectory: folder });
+  if (preHandler) app.addHook("preHandler", async (request) => preHandler(request));
   opened.push({ app, folder });
   const response = await app.inject({ method: "POST", url: "/projects", payload: { name: "Recovery test" } });
   expect(response.statusCode, response.body).toBe(201);
@@ -54,13 +55,12 @@ describe("checkpoint recovery API", () => {
   });
 
   it("refuses recovery while an editor mutation is in flight", async () => {
-    const { app, state, file } = await project();
     let entered!: () => void;
     let release!: () => void;
     const started = new Promise<void>((resolve) => { entered = resolve; });
     const gate = new Promise<void>((resolve) => { release = resolve; });
-    app.addHook("preHandler", async (request) => {
-      if (request.method === "PATCH" && request.url === `/projects/${state.id}`) {
+    const { app, state, file } = await project(async (request) => {
+      if (request.method === "PATCH" && /^\\/projects\\/[0-9a-f-]+$/i.test(request.url)) {
         entered();
         await gate;
       }

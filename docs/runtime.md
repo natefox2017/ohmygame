@@ -318,7 +318,7 @@ compacted into a new verified content-addressed store; the previous store is
 kept until the replacement is ready, and interrupted rotations are recovered
 on the next startup. If available space or the snapshot budget is insufficient,
 a new Agent turn fails closed rather than risking the existing game files.
-Native dialogs show the user what is being restored. Do not manually delete
+The existing styled project dialog shows version dates, changed files, and an explicit two-step confirmation. Do not manually delete
 checkpoint storage to free space; keep your GitHub repositories intact.
 
 Recovery refuses to run while any Agent turn, project API mutation, or scoped

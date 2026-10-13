@@ -62,7 +62,7 @@ import { MeshyProvider } from "./meshy-provider.js";
 import { MediaProviderKeyStore } from "./media-provider-settings.js";
 import { TripoProvider } from "./tripo-provider.js";
 import { Hyper3DProvider } from "./hyper3d-provider.js";
-import type { ImageGenerator } from "./openai-image.js";
+import { ImageGenerationError, type ImageGenerator } from "./openai-image.js";
 import { ProviderImages } from "./provider-images.js";
 import { CodexSubscriptionImages } from "./codex-image.js";
 import { ProviderModels3D } from "./provider-models3d.js";

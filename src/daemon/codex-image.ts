@@ -93,6 +93,10 @@ export class CodexSubscriptionImages implements ImageGenerator {
     const timeout = setTimeout(() => abortWith(new ImageGenerationError("Codex image generation timed out", 504)), GENERATION_TIMEOUT_MS);
     signal?.addEventListener("abort", cancel, { once: true });
     child.on("error", (cause) => abortWith(new ImageGenerationError("Codex App Server could not start: " + cause.message, 503)));
+    // A process that exits during initialization can close stdin between RPC
+    // writes. Writable stream errors do not propagate through child.on("error")
+    // and would otherwise be an unhandled exception in the desktop daemon.
+    child.stdin.on("error", (cause) => abortWith(new ImageGenerationError("Codex App Server input closed: " + cause.message, 502)));
     child.on("exit", (code) => {
       if (!stopped) abortWith(new ImageGenerationError("Codex App Server exited before producing an image (code " + code + "). " + stderr.slice(-300), 502));
     });
@@ -109,7 +113,10 @@ export class CodexSubscriptionImages implements ImageGenerator {
       });
     };
     const notify = (method: string): void => {
-      child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method }) + "\n");
+      if (stopped) return;
+      child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method }) + "\n", (cause) => {
+        if (cause) abortWith(new ImageGenerationError("Unable to send the Codex notification", 502));
+      });
     };
     const onMessage = (message: Record<string, unknown>) => {
       if (typeof message.id === "number") {

@@ -299,6 +299,35 @@ cover is retained separately. Duplicating a project preserves both covers.
 The Community cover is a snapshot in the published Deployment and changes only
 when an update is published; publication details show that snapshot.
 
+## Agent workspace recovery
+
+Before each ordinary Pi Agent turn that may change the game, OhMyGame records a
+private checkpoint under `projects/<id>/checkpoints/`, **outside** the
+workspace (and never inside a linked external project folder). Each completed
+turn records both its before and after state. The existing **Project actions →
+Restore version** menu offers recent turn undo and prior-version recovery, with
+changed file paths and a mandatory confirmation. The menu does not change any
+application layout. Restoring an Agent turn leaves later unrelated edits alone
+and refuses conflicts; restoring an earlier complete version may replace files
+only after a separate confirmation and keeps a reversible recovery snapshot.
+
+By default, a project's checkpoint store is budgeted to 5 GiB with at most
+20 completed Agent turns retained. For unusual projects, the daemon may be
+launched with `OHMYGAME_CHECKPOINT_MAX_MIB` (128–50000 MiB). Old snapshots are
+compacted into a new verified content-addressed store; the previous store is
+kept until the replacement is ready, and interrupted rotations are recovered
+on the next startup. If available space or the snapshot budget is insufficient,
+a new Agent turn fails closed rather than risking the existing game files.
+Native dialogs show the user what is being restored. Do not manually delete
+checkpoint storage to free space; keep your GitHub repositories intact.
+
+Recovery refuses to run while any Agent turn, project API mutation, or scoped
+media-generation job is active. It also stops the preview process and invalidates
+active Agent sessions. External editors and programs writing directly to a
+linked workspace cannot be paused by the daemon; close them first. Conflict
+checks reject unexpected file changes, and changes made after the current
+snapshot are not silently discarded by an Agent-turn undo.
+
 ## Publishing
 
 A workspace is publishable when it has a non-empty `scripts.build` that

@@ -321,7 +321,8 @@ interface AgentManagerOptions {
   activeToolNames?: (project: ProjectState, mode: PlanMode, session: CodingSession) => string[];
   onRunCompleted?: (project: ProjectState) => void;
   onBeforeRun?: (project: ProjectState, conversationId: string, turnId: string) => Promise<void>;
-  onRunFinished?: (project: ProjectState, conversationId: string, turnId: string) => Promise<void>;
+  onAfterRun?: (project: ProjectState, conversationId: string, turnId: string) => Promise<void>;
+  onRunFinished?: (project: ProjectState, conversationId: string) => Promise<void>;
   errorDiagnostics?: () => NonNullable<ThreadItemError["diagnostics"]>;
   onRunFailed?: (error: ThreadItemError, scope: { projectId: string; conversationId: string; turnId: string }) => void;
 }
@@ -1089,7 +1090,8 @@ export class AgentManager {
     const key = conversationKey(projectId, active.conversationId);
     await this.#withQueueMutation(key, async () => {
       if (this.#activeTurns.get(key) !== active) return;
-      await this.options.onRunFinished?.(project, active.conversationId, active.turnId);
+      await this.options.onAfterRun?.(project, active.conversationId, active.turnId);
+      await this.options.onRunFinished?.(project, active.conversationId);
       this.#activeTurns.delete(key);
       const questionnaire = this.#questionnaires.get(key);
       if (questionnaire) {

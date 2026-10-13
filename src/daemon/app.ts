@@ -518,7 +518,10 @@ export function createApp(options: AppOptions = {}) {
   const projects = new ProjectManager(dataDirectory, library);
   const attachments = new AgentAttachmentStore();
   const conversations = new ConversationManager(conversationImages);
-  const checkpoints = new AgentCheckpoints();
+  const configuredCheckpointMiB = Number(process.env.OHMYGAME_CHECKPOINT_MAX_MIB);
+  const checkpointBytes = Number.isSafeInteger(configuredCheckpointMiB) && configuredCheckpointMiB >= 128 && configuredCheckpointMiB <= 50_000
+    ? configuredCheckpointMiB * 1024 * 1024 : undefined;
+  const checkpoints = new AgentCheckpoints(undefined, checkpointBytes);
   const restoringProjects = new Set<string>();
   const agentPlaytests = new Map<string, OwnedPlaytestDriver>();
   const publishing = new Set<string>();

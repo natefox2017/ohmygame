@@ -7,6 +7,10 @@ import { CURRENT_SESSION_VERSION, parseSessionEntries, SessionManager, type File
 import type { PromptImage, ProjectState } from "../shared/contracts.js";
 import type { ConversationImageStore } from "./conversation-images.js";
 
+// A file rewritten within the filesystem timestamp tick can retain its old stat signature.
+// Recheck recent files by content, rather than trusting mtime/ctime on coarse-resolution disks.
+const RECENT_FILE_MS = 2_500;
+
 interface CachedSession {
   signature: string;
   inode: number;
@@ -33,7 +37,7 @@ export class ConversationCache {
     if (!stats) { this.#metadata.delete(file); this.#cache.delete(file); return undefined; }
     const signature = fileSignature(stats);
     const cached = this.#metadata.get(file);
-    if (cached?.signature === signature) return cached.info;
+    if (cached?.signature === signature && !recentFile(stats)) return cached.info;
     const manager = await this.read(project, file);
     if (!manager) return undefined;
     const info = sessionInfo(manager, file, stats.mtime);
@@ -62,9 +66,14 @@ export class ConversationCache {
     const signature = fileSignature(stats);
     const cached = this.#cache.get(file);
     if (cached?.signature === signature) {
-      this.#cache.delete(file);
-      this.#cache.set(file, cached);
-      return cached.manager;
+      // Rewrites such as "Renamed" → "Changed" can leave size and timestamps
+      // unchanged when they happen in the same filesystem time quantum.
+      const unchanged = !recentFile(stats) || (await hashPrefix(file, stats.size)).digest("hex") === cached.digest;
+      if (unchanged) {
+        this.#cache.delete(file);
+        this.#cache.set(file, cached);
+        return cached.manager;
+      }
     }
     // Reuse entries only when the entire old prefix is unchanged and needs no migration.
     const prefix = cached?.appendable && cached.offset === cached.size && cached.inode === stats.ino && stats.size > cached.size
@@ -136,6 +145,10 @@ async function hashPrefix(file: string, size: number): Promise<Hash> {
     await setImmediate();
   }
   return hash;
+}
+
+function recentFile(stats: { mtimeMs: number; ctimeMs: number }): boolean {
+  return Date.now() - Math.max(stats.mtimeMs, stats.ctimeMs) < RECENT_FILE_MS;
 }
 
 function fileSignature(stats: { ino: number; size: number; mtimeMs: number; ctimeMs: number }): string {

@@ -81,6 +81,34 @@ describe("checkpoint recovery API", () => {
     expect((await saving).statusCode).toBe(200);
   });
 
+  it("blocks restoration while the project is open in an editor, then allows it after the lease ends", async () => {
+    const { app, state, file } = await project();
+    const lease = `/projects/${state.id}/preview/leases/editor-window-1`;
+    const acquired = await app.inject({
+      method: "PUT",
+      url: lease,
+      payload: { automatic: false, paused: true },
+    });
+    expect(acquired.statusCode, acquired.body).toBe(200);
+    const base = `/projects/${state.id}/checkpoints/undo`;
+    const blocked = await app.inject({
+      method: "POST",
+      url: base,
+      payload: { turnId: "turn-1", confirm: true },
+    });
+    expect(blocked.statusCode).toBe(409);
+    expect(blocked.body).toContain("Close the open project editor");
+    expect(await readFile(file, "utf8")).toBe("after\n");
+
+    const released = await app.inject({ method: "DELETE", url: lease });
+    expect(released.statusCode).toBe(204);
+    const restored = await app.inject({
+      method: "POST", url: base, payload: { turnId: "turn-1", confirm: true },
+    });
+    expect(restored.statusCode, restored.body).toBe(200);
+    expect(await readFile(file, "utf8")).toBe("before\n");
+  });
+
   it("refuses unknown checkpoint ids and preserves the workspace", async () => {
     const { app, state, file } = await project();
     const response = await app.inject({

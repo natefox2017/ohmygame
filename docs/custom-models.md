@@ -136,9 +136,12 @@ cancel or change the service's subscription.
 ## Codex subscription image generation (optional)
 
 OhMyGame can list **Codex Image (automatic size)** in the existing Image model
-picker when the official Codex CLI is installed and `codex login status` reports
+picker when `OHMYGAME_ENABLE_CODEX_IMAGES=1` is set before starting the desktop daemon,
+the official Codex CLI is installed, and `codex login status` reports
 **Logged in using ChatGPT**. Install the official CLI, run `codex login` in
-your terminal, then reload the Image catalog in **Providers & Models**.
+your terminal, restart the desktop daemon with `OHMYGAME_ENABLE_CODEX_IMAGES=1`,
+then reload the Image catalog in **Providers & Models**. The opt-in prevents a
+locally installed CLI from silently changing existing image-model defaults.
 
 This is an independent image backend through the official `codex app-server`.
 The existing Pi coding model and any OpenAI API/OpenRouter image configuration

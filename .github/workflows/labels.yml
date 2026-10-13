@@ -11,12 +11,14 @@ permissions:
 
 concurrency:
   group: labels-${{ github.event.issue.number || github.event.pull_request.number }}
-  cancel-in-progress: false
+  # New PR/issue events supersede stale labeling runs. Never waste the CI runner on old metadata.
+  cancel-in-progress: true
 
 jobs:
   issues:
     if: github.event_name == 'issues'
     runs-on: [self-hosted, linux, x64, grok-box]
+    timeout-minutes: 3
     permissions:
       issues: write
     steps:
@@ -64,6 +66,7 @@ jobs:
   pull-requests:
     if: github.event_name == 'pull_request_target'
     runs-on: [self-hosted, linux, x64, grok-box]
+    timeout-minutes: 3
     permissions:
       contents: read
       pull-requests: write

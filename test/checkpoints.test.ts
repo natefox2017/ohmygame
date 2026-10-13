@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { deflateSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { FileChangedError, writeFileBlob } from "../src/daemon/checkpoint-objects.js";
+import { FileChangedError, readCommitTree, readTree, writeFileBlob } from "../src/daemon/checkpoint-objects.js";
 import { CheckpointChangedError, CheckpointConflictError, CheckpointIncompleteError, CheckpointStore, checkpointDirectory } from "../src/daemon/checkpoints.js";
 
 // Lets a test step in just before the store touches the file system, to stand in for another writer or a failing disk.
@@ -200,6 +200,44 @@ describe("workspace checkpoints", () => {
     expect(await contents(game.workspacePath)).toEqual({ "src/game.ts": "one" });
     await store.restore(game, restored.previous);
     expect(await contents(game.workspacePath)).toEqual({ "src/game.ts": "two", "src/added.ts": "added" });
+  });
+
+  it("refuses a damaged target blob before removing or overwriting any game files", async () => {
+    const game = await project({ "game.ts": "version one", "keep.ts": "keep original" });
+    const store = new CheckpointStore();
+    const original = await store.snapshot(game);
+    const gitdir = checkpointDirectory(game);
+    const entries = await readTree(gitdir, await readCommitTree(gitdir, original));
+    const target = entries.find((entry) => entry.name === "game.ts");
+    expect(target).toBeDefined();
+
+    // Current workspace has both an edited file and an added user file that
+    // a full restore would ordinarily replace/remove.
+    await write(game.workspacePath, { "game.ts": "version two", "draft.ts": "user draft" });
+    const current = await contents(game.workspacePath);
+    await writeFile(path.join(gitdir, "objects", target!.oid.slice(0, 2), target!.oid.slice(2)), "damaged object");
+
+    await expect(store.restore(game, original)).rejects.toThrow(/damaged|object/i);
+    expect(await contents(game.workspacePath)).toEqual(current);
+    await expect(readFile(path.join(gitdir, "ohmygame-unfinished.json"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("refuses a damaged undo target before modifying the game", async () => {
+    const game = await project({ "game.ts": "before" });
+    const store = new CheckpointStore();
+    const before = await store.snapshot(game);
+    await write(game.workspacePath, { "game.ts": "after", "agent-added.ts": "generated" });
+    const after = await store.snapshot(game);
+    const gitdir = checkpointDirectory(game);
+    const target = (await readTree(gitdir, await readCommitTree(gitdir, before)))
+      .find((entry) => entry.name === "game.ts");
+    expect(target).toBeDefined();
+    await writeFile(path.join(gitdir, "objects", target!.oid.slice(0, 2), target!.oid.slice(2)), "damaged object");
+    const current = await contents(game.workspacePath);
+
+    await expect(store.undo(game, { before, after })).rejects.toThrow(/damaged|object/i);
+    expect(await contents(game.workspacePath)).toEqual(current);
+    await expect(readFile(path.join(gitdir, "ohmygame-unfinished.json"))).rejects.toMatchObject({ code: "ENOENT" });
   });
 
   it("changes nothing when asked for a snapshot it does not have", async () => {

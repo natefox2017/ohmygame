@@ -109,6 +109,24 @@ describe("AgentCheckpoints", () => {
     expect((await new AgentCheckpoints().list(project)).turns).toEqual([]);
   });
 
+  it("prunes excessive recovery history without losing the latest reversible state", async () => {
+    const { project, file } = await fixture();
+    const checkpoints = new AgentCheckpoints();
+    await checkpoints.before(project, "chat", "turn");
+    await writeFile(file, "after\\n");
+    await checkpoints.after(project, "turn");
+    for (let index = 0; index < 6; index += 1) {
+      const history = await checkpoints.list(project);
+      const turn = history.turns[0]!;
+      await checkpoints.restore(project, index % 2 === 0 ? turn.before : turn.after!);
+    }
+    const history = await new AgentCheckpoints().list(project);
+    expect(history.recoveries.length).toBeLessThanOrEqual(4);
+    const last = await readFile(file, "utf8");
+    await checkpoints.restore(project, history.recoveries.at(-1)!);
+    expect(await readFile(file, "utf8")).not.toBe(last);
+  });
+
   it("recovers an interrupted disk rotation without losing the original ledger", async () => {
     const { project, file } = await fixture();
     const checkpoints = new AgentCheckpoints();

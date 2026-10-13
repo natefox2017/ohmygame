@@ -167,6 +167,7 @@ export class ProviderImages implements ImageGenerator {
     }
     if (input.images?.length && !definition.supportsReferenceImage) throw new ImageGenerationError("Reference images are not supported by the selected model", 400);
     if (input.images && definition.maxReferenceImages !== undefined && input.images.length > definition.maxReferenceImages) throw new ImageGenerationError(`The selected image model supports up to ${definition.maxReferenceImages} reference images`, 400);
+    if (definition.protocol === "codex-app-server") throw new ImageGenerationError("Use the configured Codex Image provider", 503);
     const adapter = createImageProtocolAdapters(this.request)[definition.protocol];
     const { imageModel: _, ...generationInput } = input;
     return adapter.generate(selection.source, selection.model.id, {

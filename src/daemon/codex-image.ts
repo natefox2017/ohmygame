@@ -80,6 +80,9 @@ export class CodexSubscriptionImages implements ImageGenerator {
     let accept!: (value: GeneratedImage) => void;
     let reject!: (error: Error) => void;
     const completed = new Promise<GeneratedImage>((resolve, fail) => { accept = resolve; reject = fail; });
+    // The server may fail during the RPC handshake, before this promise is awaited.
+    // Observe early rejection without swallowing the error returned by generate().
+    void completed.catch(() => {});
 
     const abortWith = (cause: Error) => {
       if (stopped) return;

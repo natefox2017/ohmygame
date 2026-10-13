@@ -834,10 +834,10 @@ export function createApp(options: AppOptions = {}) {
   };
   app.addHook("onRequest", async (request, reply) => {
     if (request.method === "GET" || request.method === "HEAD" || request.method === "OPTIONS") return;
-    const match = /^\\/projects\\/([0-9a-f-]{36})(?:\\/|\\?|$)/i.exec(request.url);
+    const match = /^\/projects\/([0-9a-f-]{36})(?:\/|\?|$)/i.exec(request.url);
     if (!match) return;
     const projectId = match[1]!;
-    if (/^\\/projects\\/[0-9a-f-]{36}\\/checkpoints\\/(?:undo|restore)(?:\\?|$)/i.test(request.url)) return;
+    if (/^\/projects\/[0-9a-f-]{36}\/checkpoints\/(?:undo|restore)(?:\?|$)/i.test(request.url)) return;
     if (restoringProjects.has(projectId)) return reply.code(409).send({ error: "Workspace restore in progress. Reload the project before saving." });
     trackedRequests.set(request, projectId);
     activeProjectWrites.set(projectId, (activeProjectWrites.get(projectId) ?? 0) + 1);

@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ProjectState } from "../src/shared/contracts.js";
 import { AgentCheckpoints } from "../src/daemon/agent-checkpoints.js";
 import { CheckpointConflictError } from "../src/daemon/checkpoints.js";
+import { readCommitTree, readTree } from "../src/daemon/checkpoint-objects.js";
 
 const roots: string[] = [];
 afterEach(async () => {
@@ -141,6 +142,37 @@ describe("AgentCheckpoints", () => {
     await expect(new AgentCheckpoints().list(project)).rejects.toThrow("Incomplete checkpoint rotation");
     expect((await readFile(path.join(previous, "agent-turns.json"), "utf8"))).toContain("turn-1");
     expect(await readFile(file, "utf8")).toBe("new\n");
+  });
+
+  it("keeps the last known-good archive when rotated tree metadata is intact but a blob is corrupt", async () => {
+    const { project, file } = await fixture();
+    const checkpoints = new AgentCheckpoints();
+    await checkpoints.before(project, "conversation", "turn-1");
+    await writeFile(file, "revision after agent\n");
+    await checkpoints.after(project, "turn-1");
+
+    const active = path.join(project.storagePath!, "checkpoints");
+    const previous = active + ".previous";
+    await rename(active, previous);
+    // Simulate a rotated replacement whose ledger, commits and trees all look
+    // correct; only the actual recoverable game bytes have been damaged.
+    await cp(previous, active, { recursive: true });
+    const history = JSON.parse(await readFile(path.join(active, "agent-turns.json"), "utf8")) as {
+      turns: Array<{ before: string }>;
+    };
+    const tree = await readCommitTree(active, history.turns[0]!.before);
+    const game = (await readTree(active, tree)).find((entry) => entry.name === "game.txt");
+    expect(game).toBeDefined();
+    const object = path.join(active, "objects", game!.oid.slice(0, 2), game!.oid.slice(2));
+    await writeFile(object, "corrupt compressed game content");
+
+    await expect(new AgentCheckpoints().list(project)).rejects.toThrow("Incomplete checkpoint rotation");
+    expect((await readFile(path.join(previous, "agent-turns.json"), "utf8"))).toContain("turn-1");
+    expect(await readFile(file, "utf8")).toBe("revision after agent\n");
+    // The copy from before rotation still holds the bytes required for recovery.
+    const goodTree = await readCommitTree(previous, history.turns[0]!.before);
+    const good = (await readTree(previous, goodTree)).find((entry) => entry.name === "game.txt")!;
+    expect((await readFile(path.join(previous, "objects", good.oid.slice(0, 2), good.oid.slice(2)))).length).toBeGreaterThan(0);
   });
 
   it("recovers an interrupted disk rotation without losing the original ledger", async () => {

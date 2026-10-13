@@ -229,6 +229,7 @@ export class CheckpointStore {
       const { current, changes } = await this.#planned(project, async (snapshot) => ({ changes: await this.#diff(gitdir, snapshot.tree, target) }));
       const blocked = await this.#blocked(project, current, changes);
       if (blocked.length) throw new CheckpointConflictError(blocked);
+      await this.#verifyTargets(project, changes);
       await this.#apply(project, current, changes);
       return { previous: current.commit, changed: paths(changes) };
     });
@@ -255,6 +256,7 @@ export class CheckpointStore {
       if (conflicts.length && !options.conflicts) throw new CheckpointConflictError(conflicts);
       if (blocked.length && options.conflicts === "overwrite") throw new CheckpointConflictError(blocked);
       const applied = changes.filter((change) => !blocked.includes(change.path));
+      await this.#verifyTargets(project, applied);
       await this.#apply(project, current, applied);
       return { previous: current.commit, changed: paths(applied), conflicts };
     });
@@ -371,6 +373,18 @@ export class CheckpointStore {
       if (oid !== change.from!.oid) throw new CheckpointChangedError(change.path);
     }
     return stats;
+  }
+
+  /**
+   * Verify every file we are about to restore before deleting or replacing any
+   * workspace content. A damaged *target* blob must fail closed: checking only
+   * the current-state blobs risks deleting files before a corrupt historical
+   * object is discovered during the subsequent write.
+   */
+  async #verifyTargets(project: CheckpointProject, changes: Change[]): Promise<void> {
+    const gitdir = checkpointDirectory(project);
+    const ids = [...new Set(changes.flatMap((change) => change.to ? [change.to.oid] : []))];
+    await all(ids.map((id) => this.#limit(() => verifyBlob(gitdir, id))));
   }
 
   /** Makes the changes. When that fails part way, the ones already made are taken back. */

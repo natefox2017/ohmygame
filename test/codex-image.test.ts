@@ -8,7 +8,7 @@ import { ProviderImages, CODEX_IMAGE_PROVIDER, CODEX_IMAGE_MODEL_ID } from "../s
 const roots: string[] = [];
 const PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+/W1cAAAAASUVORK5CYII=";
 
-async function fakeCodex(mode: "ok" | "missing-image" | "failed-image" | "api-key" = "ok"): Promise<CodexSubscriptionImages> {
+async function fakeCodex(mode: "ok" | "missing-image" | "failed-image" | "api-key" | "early-exit" = "ok"): Promise<CodexSubscriptionImages> {
   const root = await mkdtemp(path.join(tmpdir(), "ohmygame-fake-codex-"));
   roots.push(root);
   const script = path.join(root, "codex.mjs");
@@ -20,6 +20,7 @@ async function fakeCodex(mode: "ok" | "missing-image" | "failed-image" | "api-ke
     'if (process.argv[2] === "login") {',
     '  process.stderr.write(mode === "api-key" ? "Logged in using an API key\\n" : "Logged in using ChatGPT\\n");',
     '} else {',
+    '  if (mode === "early-exit") { process.stdin.destroy(); process.exit(0); }',
     '  const input = readline.createInterface({ input: process.stdin });',
     '  input.on("line", (line) => {',
     '    const call = JSON.parse(line);',
@@ -76,6 +77,12 @@ describe("Codex subscription image provider", () => {
   it("surfaces a subscription usage limit without falling back to a paid API", async () => {
     const codex = await fakeCodex("failed-image");
     await expect(codex.generate({ prompt: "An icon" })).rejects.toThrow("limit was reached");
+  });
+
+  it("rejects cleanly when Codex closes its input pipe during the handshake", async () => {
+    const codex = await fakeCodex("early-exit");
+    await expect(codex.generate({ prompt: "A sprite" }))
+      .rejects.toThrow(/input closed|Unable to send|exited before producing|not running/);
   });
 
   it("rejects unsupported exact image dimensions and reference images", async () => {

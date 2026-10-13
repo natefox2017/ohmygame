@@ -95,6 +95,10 @@ describe("AgentCheckpoints", () => {
 
     await expect(new AgentCheckpoints().before(project, "conversation", "turn-2"))
       .rejects.toThrow("history is missing while snapshots still exist");
+    // A malformed checkpoint HEAD cannot be treated as an unused store either.
+    await writeFile(path.join(project.storagePath!, "checkpoints", "refs", "heads", "checkpoints"), "damaged-ref\n");
+    await expect(new AgentCheckpoints().before(project, "conversation", "turn-3"))
+      .rejects.toThrow("history is missing while snapshots still exist");
     expect(await readFile(file, "utf8")).toBe("version two\n");
     await expect(readFile(ledger)).rejects.toMatchObject({ code: "ENOENT" });
   });

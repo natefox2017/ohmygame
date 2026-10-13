@@ -202,6 +202,36 @@ export async function updateProjectRunSettings(projectId: string, input: Project
   });
 }
 
+export interface ProjectCheckpointHistory {
+  turns: Array<{
+    turnId: string;
+    conversationId: string;
+    before: string;
+    after?: string;
+    startedAt: string;
+    finishedAt?: string;
+    changes?: Array<{ path: string; kind: "added" | "modified" | "removed" }>;
+  }>;
+  recoveries: string[];
+  unfinished?: string;
+}
+
+export function listProjectCheckpoints(projectId: string): Promise<ProjectCheckpointHistory> {
+  return request(`/projects/${encodeURIComponent(projectId)}/checkpoints`);
+}
+
+export function undoProjectCheckpoint(projectId: string, turnId: string): Promise<{ previous: string; changed: string[] }> {
+  return request(`/projects/${encodeURIComponent(projectId)}/checkpoints/undo`, {
+    method: "POST", body: JSON.stringify({ turnId, confirm: true }),
+  });
+}
+
+export function restoreProjectCheckpoint(projectId: string, commit: string): Promise<{ previous: string; changed: string[] }> {
+  return request(`/projects/${encodeURIComponent(projectId)}/checkpoints/restore`, {
+    method: "POST", body: JSON.stringify({ commit, confirm: true }),
+  });
+}
+
 export async function duplicateProject(projectId: string): Promise<ProjectState> {
   return request(`/projects/${projectId}/duplicate`, { method: "POST" });
 }

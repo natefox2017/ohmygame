@@ -816,6 +816,32 @@ export function createApp(options: AppOptions = {}) {
     }
   });
 
+  // Restore must not race an in-flight editor/canvas/API write. This gate is
+  // installed after the daemon's authorization hook and covers every project
+  // mutation endpoint, including new routes registered by plugins.
+  const activeProjectWrites = new Map<string, number>();
+  const trackedRequests = new WeakMap<object, string>();
+  const releaseProjectWrite = (request: object) => {
+    const projectId = trackedRequests.get(request);
+    if (!projectId) return;
+    trackedRequests.delete(request);
+    const remaining = (activeProjectWrites.get(projectId) ?? 1) - 1;
+    if (remaining) activeProjectWrites.set(projectId, remaining);
+    else activeProjectWrites.delete(projectId);
+  };
+  app.addHook("onRequest", async (request, reply) => {
+    if (request.method === "GET" || request.method === "HEAD" || request.method === "OPTIONS") return;
+    const match = /^\\/projects\\/([0-9a-f-]{36})(?:\\/|\\?|$)/i.exec(request.url);
+    if (!match) return;
+    const projectId = match[1]!;
+    if (/^\\/projects\\/[0-9a-f-]{36}\\/checkpoints\\/(?:undo|restore)(?:\\?|$)/i.test(request.url)) return;
+    if (restoringProjects.has(projectId)) return reply.code(409).send({ error: "Workspace restore in progress. Reload the project before saving." });
+    trackedRequests.set(request, projectId);
+    activeProjectWrites.set(projectId, (activeProjectWrites.get(projectId) ?? 0) + 1);
+  });
+  app.addHook("onResponse", async (request) => { releaseProjectWrite(request); });
+  app.addHook("onError", async (request) => { releaseProjectWrite(request); });
+
   app.get("/health", async () => ({ status: "ok" }));
 
   // The page Scenes run in. The desktop app loads its own pages from file://,
@@ -1021,6 +1047,7 @@ export function createApp(options: AppOptions = {}) {
           throw new ToolRunError("Project and node context must be provided together", 400);
         }
         if (projectId && !projects.get(projectId)) throw new ToolRunError("Project not found", 404);
+        if (projectId && restoringProjects.has(projectId)) throw new ToolRunError("Workspace restore in progress", 409);
         return reply.code(202).send(tools.start(request.params.toolId, input as RunToolRequest, {
           title: title?.trim(),
           ...(projectId && nodeId ? { context: { projectId, nodeId } } : {}),
@@ -1456,8 +1483,10 @@ export function createApp(options: AppOptions = {}) {
   });
 
   const withCheckpointRestore = async <T,>(project: ProjectState, action: () => Promise<T>): Promise<T> => {
-    if (agents.isProjectBusy(project.id) || restoringProjects.has(project.id)) {
-      throw new Error("Wait for the Agent and previous restore to finish");
+    if (agents.isProjectBusy(project.id) || restoringProjects.has(project.id)
+      || (activeProjectWrites.get(project.id) ?? 0) > 0
+      || tools.jobs().some((job) => job.status === "running" && job.context?.projectId === project.id)) {
+      throw new CheckpointConflictError(["An Agent, generation job or workspace edit is still active"]);
     }
     restoringProjects.add(project.id);
     try {

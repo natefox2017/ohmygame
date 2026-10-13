@@ -292,7 +292,7 @@ export interface ImageModel extends ImageModelRef {
   supportsAspectRatio?: boolean;
 }
 
-export type ImageProtocol = "openai-images" | "gemini-generate-content" | "openrouter-images" | "volcengine-images";
+export type ImageProtocol = "openai-images" | "gemini-generate-content" | "openrouter-images" | "volcengine-images" | "codex-app-server";
 
 export interface PublicationState {
   gameId: string;

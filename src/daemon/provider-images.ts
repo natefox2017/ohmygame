@@ -7,13 +7,32 @@ import { customMediaSource } from "./custom-media-source.js";
 import { ImageGenerationError, type GeneratedImage, type ImageGenerationInput, type ImageGenerator } from "./openai-image.js";
 import { listOpenRouterImageModels, listPublicOpenRouterImageModels, resolveOpenRouterMediaSource } from "./openrouter-media.js";
 import { SEEDREAM_BASE_URL, SEEDREAM_PROVIDER_ID, SEEDREAM_PROVIDER_NAME, seedreamModel, seedreamModels } from "./seedream-models.js";
+import { CodexSubscriptionImages } from "./codex-image.js";
 
 const CAPABILITY_TTL_MS = 10 * 60_000;
+export const CODEX_IMAGE_PROVIDER = "codex-app-server";
+export const CODEX_IMAGE_MODEL_ID = "gpt-image-2";
+/** Codex chooses output dimensions itself. The default square entry is a UI compatibility placeholder. */
+const CODEX_IMAGE_MODEL: ImageModel = {
+  provider: CODEX_IMAGE_PROVIDER,
+  providerName: "Codex · ChatGPT",
+  id: CODEX_IMAGE_MODEL_ID,
+  name: "Codex Image (automatic size)",
+  sizes: ["1024x1024"],
+  generationOptions: [{ resolution: "1K", aspectRatio: "1:1" }],
+  supportsReferenceImage: false,
+  maxReferenceImages: 0,
+  maxOutputs: 1,
+  protocol: "codex-app-server",
+  supportsResolution: false,
+  supportsAspectRatio: false,
+};
 
 interface ProviderImagesOptions {
   customProviders?: () => Promise<CustomProviderDetails[]>;
   migrateLegacyModels?: (provider: string, models: ImageModel[]) => Promise<void>;
   defaultModel?: () => ImageModelRef | undefined;
+  codex?: CodexSubscriptionImages;
 }
 
 interface ImageSelection {
@@ -45,6 +64,7 @@ export class ProviderImages implements ImageGenerator {
       runtime ? this.#openAIEntry(runtime, signal) : undefined,
       this.#seedreamEntry(),
       ...custom.map((provider) => catalogEntry(provider.id, provider.name, () => this.#customModels(runtime!, provider, signal), "Choose and enable image models in Models.")),
+      this.#codexEntry(),
     ]);
     const connected = entries.filter((entry): entry is CatalogEntry => Boolean(entry));
     const models = connected.flatMap((entry) => entry.models);
@@ -112,8 +132,28 @@ export class ProviderImages implements ImageGenerator {
     };
   }
 
+  async #codexEntry(): Promise<CatalogEntry | undefined> {
+    if (!this.options.codex || !this.isEnabled(CODEX_IMAGE_PROVIDER)) return undefined;
+    const status = await this.options.codex.availability();
+    // Do not add a phantom image model when Codex is not installed or signed in.
+    return status.available
+      ? { models: [CODEX_IMAGE_MODEL], status: { provider: CODEX_IMAGE_PROVIDER, providerName: CODEX_IMAGE_MODEL.providerName, state: "ready", message: status.message } }
+      : undefined;
+  }
+
   async generate(input: ImageGenerationInput, signal?: AbortSignal): Promise<GeneratedImage> {
-    const requested = input.imageModel ?? this.options.defaultModel?.();
+    let requested = input.imageModel ?? this.options.defaultModel?.();
+    if (!requested && this.options.codex) {
+      // Codex is appended after the existing API providers: preserve their automatic priority.
+      const models = (await this.catalog(signal)).models;
+      if (models[0]?.provider === CODEX_IMAGE_PROVIDER) requested = models[0];
+    }
+    if (requested?.provider === CODEX_IMAGE_PROVIDER) {
+      if (!this.isEnabled(CODEX_IMAGE_PROVIDER) || requested.id !== CODEX_IMAGE_MODEL_ID || !this.options.codex) {
+        throw new ImageGenerationError("The selected Codex image provider is unavailable", 503);
+      }
+      return this.options.codex.generate(input, signal);
+    }
     if (requested && !this.isEnabled(requested.provider)) throw new ImageGenerationError("The selected image provider is disabled. Enable it or choose another default image model.", 409);
     const selection = await this.#selection(requested, signal);
     const definition = selection?.model;
@@ -127,6 +167,7 @@ export class ProviderImages implements ImageGenerator {
     }
     if (input.images?.length && !definition.supportsReferenceImage) throw new ImageGenerationError("Reference images are not supported by the selected model", 400);
     if (input.images && definition.maxReferenceImages !== undefined && input.images.length > definition.maxReferenceImages) throw new ImageGenerationError(`The selected image model supports up to ${definition.maxReferenceImages} reference images`, 400);
+    if (definition.protocol === "codex-app-server") throw new ImageGenerationError("Use the configured Codex Image provider", 503);
     const adapter = createImageProtocolAdapters(this.request)[definition.protocol];
     const { imageModel: _, ...generationInput } = input;
     return adapter.generate(selection.source, selection.model.id, {

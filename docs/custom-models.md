@@ -133,6 +133,39 @@ choices stay saved and need an available connection to generate again.
 Deleting an official browser sign-in clears the local login only. It does not
 cancel or change the service's subscription.
 
+## Codex subscription image generation (optional)
+
+OhMyGame can list **Codex Image (automatic size)** in the existing Image model
+picker when `OHMYGAME_ENABLE_CODEX_IMAGES=1` is set before starting the desktop daemon,
+the official Codex CLI is installed, and `codex login status` reports
+**Logged in using ChatGPT**. Install the official CLI, run `codex login` in
+your terminal, restart the desktop daemon with `OHMYGAME_ENABLE_CODEX_IMAGES=1`,
+then reload the Image catalog in **Providers & Models**. The opt-in prevents a
+locally installed CLI from silently changing existing image-model defaults.
+
+This is an independent image backend through the official `codex app-server`.
+The existing Pi coding model and any OpenAI API/OpenRouter image configuration
+are unchanged. Codex image requests use the Codex CLI's own ChatGPT sign-in;
+OhMyGame never copies its OAuth token into Pi or an image API key field.
+Subscription and rate limits still apply, and the CLI's `image_gen` feature,
+model capabilities, and account entitlement determine whether generation works.
+Login detection by itself is **not** a successful image generation test.
+
+For safety, Codex runs in an isolated temporary working directory, not the game
+workspace. The generated image's bytes arrive over the app-server protocol and
+are saved using the existing Asset Library pipeline. The integration currently
+supports **text-to-image only**, one output per call. Codex chooses output size
+and aspect ratio automatically; the existing square/1K UI option is a compatibility
+placeholder rather than an enforceable exact resolution. Reference-image editing
+and arbitrary 2K/4K sizing are intentionally unavailable. If Codex is missing or
+the account is ineligible, image generation fails with an explanation; it does
+not silently switch to a paid API provider.
+
+To keep existing desktop UI layout unchanged, this integration reuses the current
+Image provider/model selectors without new screens. The Codex CLI must be
+discoverable on the desktop daemon's PATH (or through `OHMYGAME_CODEX_BINARY`);
+no separate Codex installer is bundled.
+
 ## Global and project defaults
 
 The **Providers & Models** overview has global Image, Video and 3D selectors. Capability filters show the corresponding default. Provider details describe the provider's models; they do not define a separate default.

@@ -62,6 +62,7 @@ import { TripoProvider } from "./tripo-provider.js";
 import { Hyper3DProvider } from "./hyper3d-provider.js";
 import type { ImageGenerator } from "./openai-image.js";
 import { ProviderImages } from "./provider-images.js";
+import { CodexSubscriptionImages } from "./codex-image.js";
 import { ProviderModels3D } from "./provider-models3d.js";
 import { modelUsageList, modelUsages } from "../shared/custom-models.js";
 import { ToolRunner, ToolRunError } from "./tools.js";
@@ -603,6 +604,8 @@ export function createApp(options: AppOptions = {}) {
     customProviders: () => providerModelSettings.customProviderCatalog(),
     migrateLegacyModels: (id, models) => providerModelSettings.migrateLegacyImageModels(id, models, async () => { await (await getModelRuntime()).refresh({ allowNetwork: false, providers: [id] }); }),
     defaultModel: () => providerModelSettings.defaultImageModel(),
+    // Explicit opt-in prevents the optional local CLI from changing existing media selections.
+    codex: process.env.OHMYGAME_ENABLE_CODEX_IMAGES === "1" ? new CodexSubscriptionImages() : undefined,
   });
   const providerVideos = new ProviderVideos(getModelRuntime, options.videoFetch, (providerId) => seedanceSettings.key(providerId), providerEnabled, {
     customProviders: () => providerModelSettings.customProviderCatalog(), defaultModel: () => providerModelSettings.defaultVideoModel(),

@@ -610,6 +610,8 @@ export function createApp(options: AppOptions = {}) {
     ? providerModelSettings.isEnabled("hyper3d") && providerModelSettings.isEnabled("cloud-hyper3d")
     : providerModelSettings.isEnabled(id);
   const codexImages = options.codexImages ?? new CodexSubscriptionImages();
+  // A cancelled desktop/browser session must not leave its login helper running.
+  app.addHook("onClose", async () => { codexImages.cancelLogin(); });
   const providerImages = new ProviderImages(getModelRuntime, options.imageFetch, () => seedanceSettings.key("volcengine-ark"), providerEnabled, {
     customProviders: () => providerModelSettings.customProviderCatalog(),
     migrateLegacyModels: (id, models) => providerModelSettings.migrateLegacyImageModels(id, models, async () => { await (await getModelRuntime()).refresh({ allowNetwork: false, providers: [id] }); }),

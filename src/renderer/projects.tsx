@@ -4,7 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ProjectState, ProjectType } from "../shared/contracts.js";
 import { deleteProject, duplicateProject, listProjects, renameProject, waitForRuntime } from "./api.js";
 import { ProjectCard } from "./project-card.js";
-import { restoreCheckpointFromProjectMenu } from "./checkpoint-restore.js";
+import { ProjectCheckpointDialog } from "./checkpoint-restore.js";
 import { ProjectCreateDialog } from "./project-create-dialog.js";
 import { ProjectRenameDialog } from "./project-rename-dialog.js";
 import { projectDeletionConfirmation } from "./project-deletion.js";
@@ -33,6 +33,7 @@ export function ProjectsPage({ projectType = "all", onNavigate, onOpenProject }:
   const [actionError, setActionError] = useState<string>();
   const [createOpen, setCreateOpen] = useState(false);
   const [renameTarget, setRenameTarget] = useState<ProjectState>();
+  const [restoreTarget, setRestoreTarget] = useState<ProjectState>();
   const renameTrigger = useRef<HTMLElement | null>(null);
   const sortControl = useRef<HTMLDivElement>(null);
 
@@ -82,7 +83,7 @@ export function ProjectsPage({ projectType = "all", onNavigate, onOpenProject }:
   }
 
   function restore(project: ProjectState): void {
-    void runAction(() => restoreCheckpointFromProjectMenu(project));
+    setRestoreTarget(project);
   }
 
   function remove(project: ProjectState): void {
@@ -147,6 +148,8 @@ export function ProjectsPage({ projectType = "all", onNavigate, onOpenProject }:
       ) : null}
       {phase === "ready" && projects.length > 0 && visibleProjects.length === 0 ? <ProjectState><FolderPlus size={18} />No projects match your search</ProjectState> : null}
       {actionError ? <p className="projects-notice" role="alert">{actionError}</p> : null}
+      {restoreTarget ? <ProjectCheckpointDialog project={restoreTarget} onClose={() => setRestoreTarget(undefined)}
+        onRecovered={() => { setRestoreTarget(undefined); void load(); }} /> : null}
       {renameTarget ? <ProjectRenameDialog name={renameTarget.name} returnFocus={renameTrigger.current} onClose={() => setRenameTarget(undefined)} onConfirm={(name) => {
         const project = renameTarget;
         setRenameTarget(undefined);

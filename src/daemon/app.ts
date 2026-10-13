@@ -1491,6 +1491,11 @@ export function createApp(options: AppOptions = {}) {
       || tools.jobs().some((job) => job.status === "running" && job.context?.projectId === project.id)) {
       throw new CheckpointConflictError(["An Agent, generation job or workspace edit is still active"]);
     }
+    // The project might be open in a different window. Do not restore while an
+    // editor lease can still flush a stale buffer over the recovered files.
+    if (previews.hasActiveEditor(project)) {
+      throw new CheckpointConflictError(["Close the open project editor before restoring a version"]);
+    }
     restoringProjects.add(project.id);
     let incomplete = false;
     try {

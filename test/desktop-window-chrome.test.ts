@@ -123,10 +123,14 @@ vi.doMock(path.resolve("src/desktop/updater.ts"), () => ({
   },
 }));
 
+const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
+
 const DARK_CONTROLS = { color: "#1f1f1f", symbolColor: "#ffffff", height: 32 };
 const LIGHT_CONTROLS = { color: "#f7f7f7", symbolColor: "#202020", height: 32 };
 
 beforeEach(async () => {
+  // Exercise the Windows-only native chrome branch on Linux CI and macOS too.
+  Object.defineProperty(process, "platform", { ...originalPlatform, value: "win32" });
   vi.resetModules();
   vi.clearAllMocks();
   host.appEvents.clear();
@@ -139,6 +143,7 @@ beforeEach(async () => {
   expect(host.windows).toHaveLength(1);
 });
 afterEach(() => {
+  Object.defineProperty(process, "platform", originalPlatform);
   process.argv.splice(process.argv.lastIndexOf("--built-renderer"), 1);
   vi.unstubAllGlobals();
 });

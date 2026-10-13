@@ -38,8 +38,7 @@ export async function recoverCheckpointRotation(project: Pick<ProjectState, "wor
   if (!(await exists(active)) && await exists(previous)) await rename(previous, active);
   if (await exists(active) && await exists(previous)) {
     // Retain the last known-good archive if the replacement is incomplete.
-    const ledger = await readFile(path.join(active, "agent-turns.json"), "utf8").catch(() => "");
-    if (!ledger.includes('"version": 1') || !(await exists(path.join(active, "HEAD")))) {
+    if (!(await rotatedStoreUsable(active))) {
       throw new Error("Incomplete checkpoint rotation: previous recovery store was preserved");
     }
   }
@@ -49,6 +48,30 @@ export async function recoverCheckpointRotation(project: Pick<ProjectState, "wor
   } else if (await exists(next)) {
     // A first-time compaction that never reached rotation left no live store.
     await rm(next, { recursive: true, force: true });
+  }
+}
+
+/** Validate the replacement before deleting the last known-good backup. */
+async function rotatedStoreUsable(directory: string): Promise<boolean> {
+  try {
+    const head = await readHead(directory);
+    if (!head) return false;
+    await readTree(directory, await readCommitTree(directory, head));
+    const raw: unknown = JSON.parse(await readFile(path.join(directory, "agent-turns.json"), "utf8"));
+    if (!raw || typeof raw !== "object") return false;
+    const ledger = raw as Partial<CheckpointLedger>;
+    if (ledger.version !== 1 || !Array.isArray(ledger.turns) || !Array.isArray(ledger.recoveries)) return false;
+    const commitIds = [
+      ...ledger.turns.flatMap((turn) => [turn.before, ...(turn.after ? [turn.after] : [])]),
+      ...ledger.recoveries.map((recovery) => recovery.commit),
+    ];
+    for (const id of commitIds) {
+      if (!/^[a-f0-9]{40}$/.test(id)) return false;
+      await readTree(directory, await readCommitTree(directory, id));
+    }
+    return true;
+  } catch {
+    return false;
   }
 }
 

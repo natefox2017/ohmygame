@@ -18,7 +18,7 @@ export interface ImageProtocolAdapter {
 
 type Fetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
-export function createImageProtocolAdapters(request: Fetch = fetch): Record<ImageProtocol, ImageProtocolAdapter> {
+export function createImageProtocolAdapters(request: Fetch = fetch): Record<Exclude<ImageProtocol, "codex-app-server">, ImageProtocolAdapter> {
   return {
     "openai-images": {
       generate: (source, model, input, signal) => new OpenAIImageGenerator(source.apiKey, source.baseUrl, request, source.headers, source.authentication).generate({ ...input, model }, signal),

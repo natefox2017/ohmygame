@@ -4,6 +4,7 @@ import path from "node:path";
 import type { ProjectState } from "../shared/contracts.js";
 import { CheckpointStore, checkpointDirectory, type CheckpointChange, type CheckpointRestoreResult, type CheckpointUndoResult } from "./checkpoints.js";
 import { assertCheckpointCapacity, CHECKPOINT_MAX_BYTES, CHECKPOINT_MAX_TURNS, compactCheckpointHistory, recoverCheckpointRotation, type CheckpointLedger } from "./checkpoint-maintenance.js";
+import { readHead } from "./checkpoint-objects.js";
 
 const COMMIT_ID = /^[a-f0-9]{40}$/;
 
@@ -149,7 +150,15 @@ export class AgentCheckpoints {
     try {
       raw = await readFile(this.#file(project), "utf8");
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { version: 1, turns: [], recoveries: [] };
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
+        // A missing ledger is normal before the very first checkpoint only.
+        // If loose snapshots already exist, silently recreating the ledger
+        // would orphan the user's recorded restore history.
+        if (await readHead(checkpointDirectory(project))) {
+          throw new Error("Agent checkpoint history is missing while snapshots still exist; refusing to overwrite recovery history");
+        }
+        return { version: 1, turns: [], recoveries: [] };
+      }
       throw error;
     }
     const ledger: unknown = JSON.parse(raw);

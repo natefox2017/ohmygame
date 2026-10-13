@@ -42,6 +42,15 @@ export interface AgentModelCatalog {
 export const AGENT_REASONING_LEVELS = ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const;
 export type AgentReasoningLevel = (typeof AGENT_REASONING_LEVELS)[number];
 
+/** State for the optional local Codex image provider (separate from Pi's OpenAI auth). */
+export interface CodexImageConnectionStatus {
+  installed: boolean;
+  available: boolean;
+  connecting: boolean;
+  enabled: boolean;
+  message: string;
+}
+
 export type ModelAuthMethod = "api_key" | "oauth";
 
 export interface ModelProviderSummary {

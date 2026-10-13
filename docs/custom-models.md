@@ -135,13 +135,21 @@ cancel or change the service's subscription.
 
 ## Codex subscription image generation (optional)
 
-OhMyGame can list **Codex Image (automatic size)** in the existing Image model
-picker when `OHMYGAME_ENABLE_CODEX_IMAGES=1` is set before starting the desktop daemon,
-the official Codex CLI is installed, and `codex login status` reports
-**Logged in using ChatGPT**. Install the official CLI, run `codex login` in
-your terminal, restart the desktop daemon with `OHMYGAME_ENABLE_CODEX_IMAGES=1`,
-then reload the Image catalog in **Providers & Models**. The opt-in prevents a
-locally installed CLI from silently changing existing image-model defaults.
+To configure Codex images, open **Providers & Models → Image → Codex ·
+ChatGPT Images**. This entry is always visible in the provider list, even when
+the official Codex CLI is unavailable. Once that CLI is installed, select
+**Connect ChatGPT** to start its separate browser sign-in from within OhMyGame,
+then select **Use Codex for images**. This enables the provider and selects
+**Codex Image (automatic size)** as the global image model. The enable choice
+is saved locally and stays off by default until selected in Settings.
+No environment variable or terminal login command is required for configuration
+when the Codex CLI is already installed. The settings page links to the
+official CLI installation guide if it is missing.
+
+The existing **OpenAI** provider's browser sign-in is for coding/language
+models. Its **Image models 0** entry is expected without an image-capable API
+key; it does not imply that an independently connected Codex image provider
+is unavailable.
 
 This is an independent image backend through the official `codex app-server`.
 The existing Pi coding model and any OpenAI API/OpenRouter image configuration
@@ -161,10 +169,12 @@ and arbitrary 2K/4K sizing are intentionally unavailable. If Codex is missing or
 the account is ineligible, image generation fails with an explanation; it does
 not silently switch to a paid API provider.
 
-To keep existing desktop UI layout unchanged, this integration reuses the current
-Image provider/model selectors without new screens. The Codex CLI must be
-discoverable on the desktop daemon's PATH (or through `OHMYGAME_CODEX_BINARY`);
-no separate Codex installer is bundled.
+The integration uses the existing provider list and image-model selectors,
+with a dedicated Codex connection detail inside the same Settings page; it
+does not change other providers or coding-model defaults. The official Codex
+CLI must be accessible to the local daemon. The app does not install or bundle
+that CLI, and identifying an existing ChatGPT login is not a guarantee that
+the image-generation entitlement is available.
 
 ## Global and project defaults
 

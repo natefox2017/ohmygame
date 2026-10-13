@@ -75,6 +75,7 @@ export const PROVIDER_ICONS: Readonly<Partial<Record<string, ProviderIcon>>> = {
   nvidia: color(nvidia),
   openai: monochrome(openAI),
   "openai-codex": color(codex),
+  "codex-app-server": color(codex),
   opencode: monochrome(openCode),
   "opencode-go": monochrome(openCode),
   openrouter: monochrome(openRouter),

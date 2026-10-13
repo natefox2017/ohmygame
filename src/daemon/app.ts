@@ -62,7 +62,7 @@ import { MeshyProvider } from "./meshy-provider.js";
 import { MediaProviderKeyStore } from "./media-provider-settings.js";
 import { TripoProvider } from "./tripo-provider.js";
 import { Hyper3DProvider } from "./hyper3d-provider.js";
-import type { ImageGenerator } from "./openai-image.js";
+import { ImageGenerationError, type ImageGenerator } from "./openai-image.js";
 import { ProviderImages } from "./provider-images.js";
 import { CodexSubscriptionImages } from "./codex-image.js";
 import { ProviderModels3D } from "./provider-models3d.js";
@@ -124,6 +124,8 @@ export interface AppOptions {
   createSession?: SessionFactory;
   imageGenerator?: ImageGenerator;
   imageFetch?: typeof fetch;
+  /** Allows deterministic Codex auth tests without accessing a real ChatGPT account. */
+  codexImages?: CodexSubscriptionImages;
   model3DGenerator?: Model3DGenerator;
   model3DFetch?: typeof fetch;
   videoGenerator?: VideoGenerator;
@@ -607,12 +609,13 @@ export function createApp(options: AppOptions = {}) {
   const providerEnabled = (id: string) => id === "hyper3d" || id === "cloud-hyper3d"
     ? providerModelSettings.isEnabled("hyper3d") && providerModelSettings.isEnabled("cloud-hyper3d")
     : providerModelSettings.isEnabled(id);
+  const codexImages = options.codexImages ?? new CodexSubscriptionImages();
   const providerImages = new ProviderImages(getModelRuntime, options.imageFetch, () => seedanceSettings.key("volcengine-ark"), providerEnabled, {
     customProviders: () => providerModelSettings.customProviderCatalog(),
     migrateLegacyModels: (id, models) => providerModelSettings.migrateLegacyImageModels(id, models, async () => { await (await getModelRuntime()).refresh({ allowNetwork: false, providers: [id] }); }),
     defaultModel: () => providerModelSettings.defaultImageModel(),
-    // Explicit opt-in prevents the optional local CLI from changing existing media selections.
-    codex: process.env.OHMYGAME_ENABLE_CODEX_IMAGES === "1" ? new CodexSubscriptionImages() : undefined,
+    // Persisted per-user opt-in (off until enabled in Providers & Models).
+    codex: codexImages,
   });
   const providerVideos = new ProviderVideos(getModelRuntime, options.videoFetch, (providerId) => seedanceSettings.key(providerId), providerEnabled, {
     customProviders: () => providerModelSettings.customProviderCatalog(), defaultModel: () => providerModelSettings.defaultVideoModel(),
@@ -2047,9 +2050,35 @@ export function createApp(options: AppOptions = {}) {
         capabilities: providerId === "volcengine-ark" ? ["image", "video"] as const : ["video"] as const,
       };
     })];
-    return [...providers, ...directProviders, ...await cloudModels.providers(providerEnabled)].sort((left, right) => left.name.localeCompare(right.name));
+    const codexConnection = await codexImages.connection();
+    const codexProvider = {
+      id: "codex-app-server", name: "Codex · ChatGPT Images",
+      configured: codexConnection.available, enabled: providerEnabled("codex-app-server"),
+      status: codexConnection.connecting ? "connecting" as const : codexConnection.available ? "connected" as const : "not_configured" as const,
+      source: codexConnection.message,
+      methods: [{ type: "oauth" as const, label: "ChatGPT sign-in via Codex CLI" }],
+      capabilities: ["image"] as const, custom: false,
+    };
+    return [...providers, ...directProviders, codexProvider, ...await cloudModels.providers(providerEnabled)].sort((left, right) => left.name.localeCompare(right.name));
   };
   app.get("/settings/providers", providerSummaries);
+  app.get<{ Querystring: { refresh?: string } }>("/settings/models/providers/codex-app-server/status", async (request) => ({
+    ...await codexImages.connection(request.query.refresh === "true"),
+    enabled: providerEnabled("codex-app-server"),
+  }));
+  app.post("/settings/models/providers/codex-app-server/login", async (_request, reply) => {
+    try {
+      await codexImages.startLogin();
+      return reply.code(202).send({ ...await codexImages.connection(), enabled: providerEnabled("codex-app-server") });
+    } catch (cause) {
+      if (cause instanceof ImageGenerationError) return reply.code(cause.statusCode).send({ error: cause.message });
+      throw cause;
+    }
+  });
+  app.delete("/settings/models/providers/codex-app-server/login", async (_request, reply) => {
+    codexImages.cancelLogin();
+    return reply.code(204).send();
+  });
   app.put<{ Body: { accessToken: string; userId: string } | null }>("/cloud/session", {
     schema: { body: { anyOf: [{ type: "null" }, { type: "object", additionalProperties: false, required: ["accessToken", "userId"], properties: {
       accessToken: { type: "string", minLength: 1, maxLength: 16_384 }, userId: { type: "string", minLength: 1, maxLength: 128 },
@@ -3099,6 +3128,8 @@ export function createApp(options: AppOptions = {}) {
   });
 
   app.addHook("onClose", async () => {
+    // Never leave a browser sign-in helper alive when the daemon shuts down.
+    codexImages.cancelLogin();
     await pluginCapabilities.host.close();
     await cloudModels.setSession(null);
     await canvasStore.close();

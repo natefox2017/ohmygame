@@ -1,0 +1,41 @@
+# Only changes to the optional Codex image integration need a full renderer build.
+# This does not package or publish macOS/Windows installers.
+name: Verify Codex image settings
+
+on:
+  pull_request:
+    paths:
+      - src/daemon/codex-image.ts
+      - src/daemon/provider-images.ts
+      - src/daemon/provider-model-settings.ts
+      - src/renderer/models-settings.tsx
+      - src/renderer/api.ts
+      - test/codex-image-settings.test.ts
+      - test/codex-image-provider-detail.test.tsx
+      - .github/workflows/verify-codex-images.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-codex-images-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: [self-hosted, linux, x64, grok-box]
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.19.0"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - run: bun install --frozen-lockfile
+      - run: bun run prepare:preinstalled-plugins
+      - name: Compile production renderer, player and daemon
+        run: bun run build
+      - name: Verify Codex configuration regressions
+        run: bun run test test/codex-image.test.ts test/codex-image-settings.test.ts test/codex-image-provider-detail.test.tsx

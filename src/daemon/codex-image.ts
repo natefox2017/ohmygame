@@ -1,4 +1,4 @@
-import { spawn, execFile } from "node:child_process";
+import { spawn, execFile, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -12,21 +12,37 @@ const MAX_RESPONSE_CHARS = 46 * 1024 * 1024;
 const MAX_IMAGE_BYTES = 32 * 1024 * 1024;
 const GENERATION_TIMEOUT_MS = 240_000;
 const LOGIN_CACHE_MS = 60_000;
+const LOGIN_TIMEOUT_MS = 5 * 60_000;
+
+/** ChatGPT authentication for the Codex CLI is independent of Pi's OpenAI login. */
+export interface CodexImageConnection {
+  available: boolean;
+  installed: boolean;
+  connecting: boolean;
+  message: string;
+}
+
+function cliAuthEnvironment(): NodeJS.ProcessEnv {
+  // Never silently use a paid API key or copy Pi's browser-login credentials.
+  return { ...process.env, OPENAI_API_KEY: "", CODEX_API_KEY: "" };
+}
 
 /** An optional, separate image provider. Never forwards Pi's OAuth credentials. */
 export class CodexSubscriptionImages implements ImageGenerator {
-  #login?: { checkedAt: number; available: boolean; message: string };
+  #login?: { checkedAt: number; available: boolean; installed: boolean; message: string };
+  #signIn?: { child: ChildProcess; timeout: NodeJS.Timeout };
+  #lastSignInError?: string;
 
   constructor(
     private readonly command = process.env.OHMYGAME_CODEX_BINARY || "codex",
     private readonly argsPrefix: string[] = [],
   ) {}
 
-  async availability(): Promise<{ available: boolean; message: string }> {
-    if (this.#login && Date.now() - this.#login.checkedAt < LOGIN_CACHE_MS) return this.#login;
-    let result: { available: boolean; message: string };
+  async availability(refresh = false): Promise<{ available: boolean; installed: boolean; message: string }> {
+    if (!refresh && this.#login && Date.now() - this.#login.checkedAt < LOGIN_CACHE_MS) return this.#login;
+    let result: { available: boolean; installed: boolean; message: string };
     try {
-      const authEnv = { ...process.env, OPENAI_API_KEY: "", CODEX_API_KEY: "" };
+      const authEnv = cliAuthEnvironment();
       const reply = await runFile(this.command, [...this.argsPrefix, "login", "status"], {
         env: authEnv,
         timeout: 10_000,
@@ -34,14 +50,59 @@ export class CodexSubscriptionImages implements ImageGenerator {
       });
       const output = reply.stdout + "\n" + reply.stderr;
       result = output.includes("Logged in using ChatGPT")
-        ? { available: true, message: "ChatGPT sign-in detected; image access depends on the account's Codex capabilities and limits." }
-        : { available: false, message: "Codex must be signed in using ChatGPT (run codex login)." };
+        ? { available: true, installed: true, message: "Signed in with ChatGPT. Image access still depends on the account and Codex capabilities." }
+        : { available: false, installed: true, message: "Codex needs a separate ChatGPT sign-in. Use Connect ChatGPT below." };
     } catch (cause) {
       const missing = (cause as NodeJS.ErrnoException).code === "ENOENT";
-      result = { available: false, message: missing ? "Install the official Codex CLI and sign in with ChatGPT." : "Codex ChatGPT login is unavailable. Run codex login status." };
+      result = { available: false, installed: !missing, message: missing
+        ? "The official Codex CLI is not installed or cannot be found by OhMyGame."
+        : "Codex login status is unavailable. Check the installation and retry." };
     }
     this.#login = { ...result, checkedAt: Date.now() };
     return result;
+  }
+
+  async connection(refresh = false): Promise<CodexImageConnection> {
+    if (this.#signIn) return { installed: true, available: false, connecting: true, message: "Complete ChatGPT sign-in in the browser. OhMyGame is waiting for Codex." };
+    const result = await this.availability(refresh);
+    return { ...result, connecting: false, message: result.available ? result.message : this.#lastSignInError ?? result.message };
+  }
+
+  /** Start the official Codex browser-login flow from the settings page. */
+  async startLogin(): Promise<void> {
+    if (this.#signIn) return;
+    const status = await this.availability(true);
+    if (!status.installed) throw new ImageGenerationError("Install the official Codex CLI before connecting ChatGPT.", 503);
+    if (status.available) return;
+    this.#lastSignInError = undefined;
+    this.#login = undefined;
+    const child = spawn(this.command, [...this.argsPrefix, "login"], {
+      env: cliAuthEnvironment(), stdio: "ignore", windowsHide: true,
+    });
+    const timeout = setTimeout(() => {
+      this.#lastSignInError = "Codex sign-in timed out. Try connecting again.";
+      child.kill();
+    }, LOGIN_TIMEOUT_MS);
+    this.#signIn = { child, timeout };
+    const finish = (message?: string) => {
+      if (this.#signIn?.child !== child) return;
+      clearTimeout(timeout);
+      this.#signIn = undefined;
+      this.#login = undefined;
+      if (message) this.#lastSignInError = message;
+    };
+    child.once("error", (cause) => finish("Could not launch Codex sign-in: " + cause.message));
+    child.once("close", (code) => finish(code === 0 ? undefined : this.#lastSignInError ?? "Codex sign-in was not completed. Retry from this page."));
+  }
+
+  cancelLogin(): void {
+    const login = this.#signIn;
+    if (!login) return;
+    clearTimeout(login.timeout);
+    this.#signIn = undefined;
+    this.#login = undefined;
+    this.#lastSignInError = "Codex sign-in cancelled.";
+    login.child.kill();
   }
 
   async generate(input: ImageGenerationInput, signal?: AbortSignal): Promise<GeneratedImage> {
@@ -64,7 +125,7 @@ export class CodexSubscriptionImages implements ImageGenerator {
 
   async #execute(prompt: string, directory: string, signal?: AbortSignal): Promise<GeneratedImage> {
     // Keep the process in a private empty workspace, not in the user's game.
-    const env = { ...process.env, OPENAI_API_KEY: "", CODEX_API_KEY: "" };
+    const env = cliAuthEnvironment();
     const child = spawn(this.command, [...this.argsPrefix, "app-server"], {
       cwd: directory, env, stdio: ["pipe", "pipe", "pipe"], windowsHide: true,
     });

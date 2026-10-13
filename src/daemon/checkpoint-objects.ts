@@ -1,6 +1,6 @@
 import { createHash, randomUUID, type Hash } from "node:crypto";
 import { createReadStream, createWriteStream } from "node:fs";
-import { copyFile, lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { chmod, copyFile, lstat, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { promisify } from "node:util";
@@ -56,6 +56,10 @@ export async function fromSource<T>(operation: Promise<T>): Promise<T> {
 }
 
 export async function initialize(gitdir: string): Promise<void> {
+  // Checkpoints may contain files normally ignored by Git, including secrets.
+  // Always restrict traversal to the current local user.
+  await mkdir(gitdir, { recursive: true, mode: 0o700 });
+  await chmod(gitdir, 0o700);
   if (await exists(path.join(gitdir, "HEAD"))) return;
   await mkdir(path.join(gitdir, "objects"), { recursive: true });
   await mkdir(path.join(gitdir, "refs", "heads"), { recursive: true });

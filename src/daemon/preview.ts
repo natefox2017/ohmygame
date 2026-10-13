@@ -580,9 +580,22 @@ export class PreviewManager {
     if (
       this.#operations.has(project.id) &&
       this.#operations.get(project.id) !== operation
-    )
-      return;
-    this.#operations.delete(project.id);
+    ) {
+      // A newer start may have replaced this stop while the old process was
+      // terminating. Wait for it to settle before deciding who owns the state.
+      // If that start fails its preflight checks (e.g. missing script), it
+      // never creates another server. Leaving the old "ready" state behind
+      // would make the editor point to a server that has already closed.
+      await this.#starting.get(project.id)?.catch(() => {});
+      if (
+        this.#running.has(project.id) ||
+        this.#static.has(project.id) ||
+        this.#proxies.has(project.id) ||
+        project.preview.status !== "ready"
+      ) return;
+    }
+    if (this.#operations.get(project.id) === operation)
+      this.#operations.delete(project.id);
     project.preview = {
       ...project.preview,
       status: "stopped",

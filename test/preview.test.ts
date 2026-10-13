@@ -371,7 +371,11 @@ describe("PreviewManager", () => {
     project.startupScript = "missing";
     await expect(manager.start(project)).rejects.toThrow("no missing script");
     await finalStop;
-    expect(project.preview.status).toBe("stopped");
+    expect(project.preview).toMatchObject({
+      status: "stopped",
+      stopReason: "manual",
+      url: undefined,
+    });
   });
 
   it("cleans up the process when readiness fails", async () => {

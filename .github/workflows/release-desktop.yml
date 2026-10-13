@@ -15,6 +15,7 @@ concurrency:
 
 jobs:
   windows:
+    if: ${{ false }}
     runs-on: windows-latest
     env:
       DESKTOP_UPDATE_URL: ${{ vars.DESKTOP_UPDATE_URL }}
@@ -76,6 +77,7 @@ jobs:
             release/latest.yml
 
   macos:
+    if: ${{ false }}
     runs-on: macos-14
     env:
       DESKTOP_UPDATE_URL: ${{ vars.DESKTOP_UPDATE_URL }}

@@ -18,6 +18,7 @@ import { ExampleShelf, useExamples } from "./examples.js";
 import { Plus, RefreshCw } from "./icons.js";
 import { AppSidebar } from "./app-sidebar.js";
 import { ProjectCard } from "./project-card.js";
+import { restoreCheckpointFromProjectMenu } from "./checkpoint-restore.js";
 import { ProjectCreateDialog } from "./project-create-dialog.js";
 import { projectDeletionConfirmation } from "./project-deletion.js";
 import { ProjectPromptCreator } from "./project-prompt-creator.js";
@@ -185,6 +186,7 @@ export function GameStudioHome({
                     onDuplicate: () =>
                       void runAction(() => duplicateProject(project.id)),
                     onDelete: () => remove(project),
+                    onRestore: () => void runAction(() => restoreCheckpointFromProjectMenu(project)),
                   }}
                 />
               ))}

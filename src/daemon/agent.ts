@@ -320,6 +320,8 @@ interface AgentManagerOptions {
   loadSkills?: (project: ProjectState) => Promise<Array<{ name: string; description: string }>>;
   activeToolNames?: (project: ProjectState, mode: PlanMode, session: CodingSession) => string[];
   onRunCompleted?: (project: ProjectState) => void;
+  onBeforeRun?: (project: ProjectState, conversationId: string, turnId: string) => Promise<void>;
+  onAfterRun?: (project: ProjectState, conversationId: string, turnId: string) => Promise<void>;
   onRunFinished?: (project: ProjectState, conversationId: string) => Promise<void>;
   errorDiagnostics?: () => NonNullable<ThreadItemError["diagnostics"]>;
   onRunFailed?: (error: ThreadItemError, scope: { projectId: string; conversationId: string; turnId: string }) => void;
@@ -778,6 +780,11 @@ export class AgentManager {
         return "cancelled";
       }
 
+      await this.options.onBeforeRun?.(project, active.conversationId, active.turnId);
+      if (isCancelling(active)) {
+        this.#markCancelled(project.id, active);
+        return "cancelled";
+      }
       const activeTools = this.options.activeToolNames?.(project, active.mode, managed.session) ?? BASE_TOOL_NAMES;
       managed.session.setActiveToolsByName?.(managed.session.getAllTools?.().some((tool) => tool.name === "recall_image")
         ? [...new Set([...activeTools, "recall_image"])] : activeTools);
@@ -1083,6 +1090,7 @@ export class AgentManager {
     const key = conversationKey(projectId, active.conversationId);
     await this.#withQueueMutation(key, async () => {
       if (this.#activeTurns.get(key) !== active) return;
+      await this.options.onAfterRun?.(project, active.conversationId, active.turnId);
       await this.options.onRunFinished?.(project, active.conversationId);
       this.#activeTurns.delete(key);
       const questionnaire = this.#questionnaires.get(key);

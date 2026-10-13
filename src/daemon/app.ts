@@ -25,6 +25,8 @@ import { matchesBearerToken } from "./access.js";
 import { AgentManager, conversationItems, createPiSession, loadPiSkillCatalog, loadPiSkills, type RuntimeModel, type SessionFactory } from "./agent.js";
 import { createAgentTools, projectPiToolNames } from "./agent-tools.js";
 import { ConversationManager, type StoredConversation } from "./conversations.js";
+import { AgentCheckpoints } from "./agent-checkpoints.js";
+import { CheckpointConflictError, CheckpointIncompleteError } from "./checkpoints.js";
 import { ConversationImageStore } from "./conversation-images.js";
 import { OwnedPlaytestDriver } from "./owned-playtest.js";
 import { generateCreativeText, generateDesignDocumentMarkdown, generateDesignTable } from "./text-generation.js";
@@ -517,6 +519,11 @@ export function createApp(options: AppOptions = {}) {
   const projects = new ProjectManager(dataDirectory, library);
   const attachments = new AgentAttachmentStore();
   const conversations = new ConversationManager(conversationImages);
+  const configuredCheckpointMiB = Number(process.env.OHMYGAME_CHECKPOINT_MAX_MIB);
+  const checkpointBytes = Number.isSafeInteger(configuredCheckpointMiB) && configuredCheckpointMiB >= 128 && configuredCheckpointMiB <= 50_000
+    ? configuredCheckpointMiB * 1024 * 1024 : undefined;
+  const checkpoints = new AgentCheckpoints(undefined, checkpointBytes);
+  const restoringProjects = new Set<string>();
   const agentPlaytests = new Map<string, OwnedPlaytestDriver>();
   const publishing = new Set<string>();
   const playerDirectory = options.interactiveStoryPlayerDirectory ?? path.join(repositoryRoot, "dist", "player");
@@ -742,6 +749,17 @@ export function createApp(options: AppOptions = {}) {
       const registered = session.getAllTools?.().map((tool) => tool.name) ?? [];
       return projectPiToolNames(mode, TOOL_IDS, registered, webSearch.enabled());
     },
+    // Injected sessions are an explicit test/dev override; normal Pi sessions always checkpoint.
+    ...(options.createSession ? {} : {
+      onBeforeRun: async (project: ProjectState, conversationId: string, turnId: string) => {
+        if (restoringProjects.has(project.id)) throw new Error("Workspace restoration is in progress");
+        await checkpoints.before(project, conversationId, turnId);
+      },
+      onAfterRun: async (project: ProjectState, _conversationId: string, turnId: string) => {
+        try { await checkpoints.after(project, turnId); }
+        catch (cause) { app.log.error({ err: cause, projectId: project.id, turnId }, "Could not finalize Agent checkpoint"); }
+      },
+    }),
     onRunFinished: async (project, conversationId) => {
       await agentPlaytests.get(`${project.id}:${conversationId}`)?.cleanup();
     },
@@ -803,6 +821,32 @@ export function createApp(options: AppOptions = {}) {
       return reply.code(401).send({ error: "Unauthorized" });
     }
   });
+
+  // Restore must not race an in-flight editor/canvas/API write. This gate is
+  // installed after the daemon's authorization hook and covers every project
+  // mutation endpoint, including new routes registered by plugins.
+  const activeProjectWrites = new Map<string, number>();
+  const trackedRequests = new WeakMap<object, string>();
+  const releaseProjectWrite = (request: object) => {
+    const projectId = trackedRequests.get(request);
+    if (!projectId) return;
+    trackedRequests.delete(request);
+    const remaining = (activeProjectWrites.get(projectId) ?? 1) - 1;
+    if (remaining) activeProjectWrites.set(projectId, remaining);
+    else activeProjectWrites.delete(projectId);
+  };
+  app.addHook("onRequest", async (request, reply) => {
+    if (request.method === "GET" || request.method === "HEAD" || request.method === "OPTIONS") return;
+    const match = /^\/projects\/([0-9a-f-]{36})(?:\/|\?|$)/i.exec(request.url);
+    if (!match) return;
+    const projectId = match[1]!;
+    if (/^\/projects\/[0-9a-f-]{36}\/checkpoints\/(?:undo|restore)(?:\?|$)/i.test(request.url)) return;
+    if (restoringProjects.has(projectId)) return reply.code(409).send({ error: "Workspace restore in progress. Reload the project before saving." });
+    trackedRequests.set(request, projectId);
+    activeProjectWrites.set(projectId, (activeProjectWrites.get(projectId) ?? 0) + 1);
+  });
+  app.addHook("onResponse", async (request) => { releaseProjectWrite(request); });
+  app.addHook("onError", async (request) => { releaseProjectWrite(request); });
 
   app.get("/health", async () => ({ status: "ok" }));
 
@@ -1009,6 +1053,7 @@ export function createApp(options: AppOptions = {}) {
           throw new ToolRunError("Project and node context must be provided together", 400);
         }
         if (projectId && !projects.get(projectId)) throw new ToolRunError("Project not found", 404);
+        if (projectId && restoringProjects.has(projectId)) throw new ToolRunError("Workspace restore in progress", 409);
         return reply.code(202).send(tools.start(request.params.toolId, input as RunToolRequest, {
           title: title?.trim(),
           ...(projectId && nodeId ? { context: { projectId, nodeId } } : {}),
@@ -1431,6 +1476,67 @@ export function createApp(options: AppOptions = {}) {
         }
       }
       return projects.setMediaModelDefaults(project.id, request.body);
+    },
+  );
+
+  // Checkpoints are private project backups, never stored inside the user's workspace.
+  // Restore requires explicit confirmation and refuses to run alongside an Agent turn.
+  app.get<{ Params: { projectId: string } }>("/projects/:projectId/checkpoints", async (request, reply) => {
+    const project = projects.get(request.params.projectId);
+    if (!project) return reply.code(404).send({ error: "Project not found" });
+    try { return await checkpoints.list(project); }
+    catch (cause) { return reply.code(500).send({ error: cause instanceof Error ? cause.message : String(cause) }); }
+  });
+
+  const withCheckpointRestore = async <T,>(project: ProjectState, action: () => Promise<T>): Promise<T> => {
+    if (agents.isProjectBusy(project.id) || restoringProjects.has(project.id)
+      || (activeProjectWrites.get(project.id) ?? 0) > 0
+      || tools.jobs().some((job) => job.status === "running" && job.context?.projectId === project.id)) {
+      throw new CheckpointConflictError(["An Agent, generation job or workspace edit is still active"]);
+    }
+    // The project might be open in a different window. Do not restore while an
+    // editor lease can still flush a stale buffer over the recovered files.
+    if (previews.hasActiveEditor(project)) {
+      throw new CheckpointConflictError(["Close the open project editor before restoring a version"]);
+    }
+    restoringProjects.add(project.id);
+    let incomplete = false;
+    try {
+      await previews.stop(project, "settings");
+      const restored = await action();
+      await projects.touch(project.id);
+      agents.invalidateProjectSessions(project.id);
+      return restored;
+    } catch (cause) {
+      // An interrupted, partly rolled-back workspace is not safe to preview.
+      incomplete = cause instanceof CheckpointIncompleteError;
+      throw cause;
+    } finally {
+      restoringProjects.delete(project.id);
+      // Explicitly allow automatic restart when an editor lease exists. Using
+      // changedOnly=true here meant a successful restore could leave a stopped
+      // preview indefinitely because its "dirty" flag was already cleared.
+      if (!incomplete) void previews.automatic(project).catch(() => undefined);
+    }
+  };
+
+  app.post<{ Params: { projectId: string }; Body: { turnId: string; confirm: boolean } }>(
+    "/projects/:projectId/checkpoints/undo", async (request, reply) => {
+      const project = projects.get(request.params.projectId);
+      if (!project) return reply.code(404).send({ error: "Project not found" });
+      if (request.body?.confirm !== true || typeof request.body.turnId !== "string" || !request.body.turnId) return reply.code(400).send({ error: "Explicit confirmation and turnId are required" });
+      try { return await withCheckpointRestore(project, () => checkpoints.undo(project, request.body.turnId)); }
+      catch (cause) { return reply.code(cause instanceof CheckpointConflictError || /finish|not found|Recover/i.test(String(cause)) ? 409 : 500).send({ error: cause instanceof Error ? cause.message : String(cause) }); }
+    },
+  );
+
+  app.post<{ Params: { projectId: string }; Body: { commit: string; confirm: boolean } }>(
+    "/projects/:projectId/checkpoints/restore", async (request, reply) => {
+      const project = projects.get(request.params.projectId);
+      if (!project) return reply.code(404).send({ error: "Project not found" });
+      if (request.body?.confirm !== true || typeof request.body.commit !== "string") return reply.code(400).send({ error: "Explicit confirmation and checkpoint ID are required" });
+      try { return await withCheckpointRestore(project, () => checkpoints.restore(project, request.body.commit)); }
+      catch (cause) { return reply.code(cause instanceof CheckpointConflictError || /finish|not recorded|Invalid checkpoint/i.test(String(cause)) ? 409 : 500).send({ error: cause instanceof Error ? cause.message : String(cause) }); }
     },
   );
 

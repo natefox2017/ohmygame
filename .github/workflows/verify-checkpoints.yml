@@ -1,0 +1,42 @@
+# Destructive workspace recovery needs a real production build in addition to
+# the repository's default typecheck, Vitest and Node-runtime CI.
+name: Verify workspace recovery
+
+on:
+  pull_request:
+    paths:
+      - src/daemon/checkpoints.ts
+      - src/daemon/checkpoint-objects.ts
+      - src/daemon/checkpoint-maintenance.ts
+      - src/daemon/agent-checkpoints.ts
+      - src/renderer/checkpoint-restore.tsx
+      - test/checkpoint*.test.ts
+      - test/checkpoint*.test.tsx
+      - test/agent-checkpoints.test.ts
+      - .github/workflows/verify-checkpoints.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-checkpoints-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  build-and-safety-tests:
+    runs-on: [self-hosted, linux, x64, grok-box]
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.19.0"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - run: bun install --frozen-lockfile
+      - run: bun run prepare:preinstalled-plugins
+      - name: Exercise checkpoint retention, undo and recovery APIs
+        run: bun run test test/checkpoints.test.ts test/agent-checkpoints.test.ts test/checkpoint-routes.test.ts test/checkpoint-restore.test.ts
+      - name: Build the full application, including renderer recovery dialog
+        run: bun run build

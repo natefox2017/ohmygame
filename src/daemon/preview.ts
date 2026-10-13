@@ -115,6 +115,13 @@ export class PreviewManager {
     if (first && automatic) void this.automatic(project).catch(() => {});
   }
 
+  /** An editor with an active lease may still hold unsaved workspace buffers. */
+  hasActiveEditor(project: ProjectState): boolean {
+    const now = Date.now();
+    return [...(this.#sessions.get(project.id)?.leases ?? [])]
+      .some(([lease, expires]) => lease.startsWith("editor:") && expires > now);
+  }
+
   release(project: ProjectState, id: string): void {
     const session = this.#sessions.get(project.id);
     if (!session) return;

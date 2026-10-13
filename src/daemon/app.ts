@@ -604,7 +604,8 @@ export function createApp(options: AppOptions = {}) {
     customProviders: () => providerModelSettings.customProviderCatalog(),
     migrateLegacyModels: (id, models) => providerModelSettings.migrateLegacyImageModels(id, models, async () => { await (await getModelRuntime()).refresh({ allowNetwork: false, providers: [id] }); }),
     defaultModel: () => providerModelSettings.defaultImageModel(),
-    codex: new CodexSubscriptionImages(),
+    // Explicit opt-in prevents the optional local CLI from changing existing media selections.
+    codex: process.env.OHMYGAME_ENABLE_CODEX_IMAGES === "1" ? new CodexSubscriptionImages() : undefined,
   });
   const providerVideos = new ProviderVideos(getModelRuntime, options.videoFetch, (providerId) => seedanceSettings.key(providerId), providerEnabled, {
     customProviders: () => providerModelSettings.customProviderCatalog(), defaultModel: () => providerModelSettings.defaultVideoModel(),

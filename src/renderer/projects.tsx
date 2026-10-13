@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import type { ProjectState, ProjectType } from "../shared/contracts.js";
 import { deleteProject, duplicateProject, listProjects, renameProject, waitForRuntime } from "./api.js";
 import { ProjectCard } from "./project-card.js";
+import { restoreCheckpointFromProjectMenu } from "./checkpoint-restore.js";
 import { ProjectCreateDialog } from "./project-create-dialog.js";
 import { ProjectRenameDialog } from "./project-rename-dialog.js";
 import { projectDeletionConfirmation } from "./project-deletion.js";
@@ -80,6 +81,10 @@ export function ProjectsPage({ projectType = "all", onNavigate, onOpenProject }:
     void runAction(() => duplicateProject(project.id));
   }
 
+  function restore(project: ProjectState): void {
+    void runAction(() => restoreCheckpointFromProjectMenu(project));
+  }
+
   function remove(project: ProjectState): void {
     if (!window.confirm(projectDeletionConfirmation(project))) return;
     void runAction(() => deleteProject(project.id));
@@ -135,7 +140,7 @@ export function ProjectsPage({ projectType = "all", onNavigate, onOpenProject }:
               actions={{ onRename: () => {
                 renameTrigger.current = document.querySelector<HTMLElement>('.project-card-menu[aria-expanded="true"]');
                 setRenameTarget(project);
-              }, onDuplicate: () => duplicate(project), onDelete: () => remove(project), ...(project.type !== "asset-canvas" ? { onDesign: () => onOpenProject(project.id, "design") } : {}) }}
+              }, onDuplicate: () => duplicate(project), onDelete: () => remove(project), onRestore: () => restore(project), ...(project.type !== "asset-canvas" ? { onDesign: () => onOpenProject(project.id, "design") } : {}) }}
             />
           ))}
         </div>

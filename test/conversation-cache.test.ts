@@ -65,6 +65,21 @@ describe("conversation UI cache", () => {
     expect((await conversations.get(project, stored.summary.id))?.summary.title).toBe("Changed");
   });
 
+  it("detects repeated same-length session rewrites without waiting for timestamp ticks", async () => {
+    const { project, stored, conversations, session } = await fixture();
+    session.appendSessionInfo("Yellow");
+    expect((await conversations.get(project, stored.summary.id))?.summary.title).toBe("Yellow");
+
+    for (const title of ["Purple", "Yellow", "Purple", "Yellow"]) {
+      const original = await readFile(stored.sessionPath, "utf8");
+      const rewritten = original.replace(/"name":"(?:Yellow|Purple)"/, `"name":"${title}"`);
+      expect(rewritten).not.toBe(original);
+      expect(rewritten.length).toBe(original.length);
+      await writeFile(stored.sessionPath, rewritten);
+      expect((await conversations.get(project, stored.summary.id))?.summary.title).toBe(title);
+    }
+  });
+
   it("recovers a partially appended record once it is complete", async () => {
     const { project, stored, conversations } = await fixture();
     await conversations.view(project, stored);

@@ -25,6 +25,8 @@ import { matchesBearerToken } from "./access.js";
 import { AgentManager, conversationItems, createPiSession, loadPiSkillCatalog, loadPiSkills, type RuntimeModel, type SessionFactory } from "./agent.js";
 import { createAgentTools, projectPiToolNames } from "./agent-tools.js";
 import { ConversationManager, type StoredConversation } from "./conversations.js";
+import { AgentCheckpoints } from "./agent-checkpoints.js";
+import { CheckpointConflictError } from "./checkpoints.js";
 import { ConversationImageStore } from "./conversation-images.js";
 import { OwnedPlaytestDriver } from "./owned-playtest.js";
 import { generateCreativeText, generateDesignDocumentMarkdown, generateDesignTable } from "./text-generation.js";
@@ -516,6 +518,8 @@ export function createApp(options: AppOptions = {}) {
   const projects = new ProjectManager(dataDirectory, library);
   const attachments = new AgentAttachmentStore();
   const conversations = new ConversationManager(conversationImages);
+  const checkpoints = new AgentCheckpoints();
+  const restoringProjects = new Set<string>();
   const agentPlaytests = new Map<string, OwnedPlaytestDriver>();
   const publishing = new Set<string>();
   const playerDirectory = options.interactiveStoryPlayerDirectory ?? path.join(repositoryRoot, "dist", "player");
@@ -739,7 +743,13 @@ export function createApp(options: AppOptions = {}) {
       const registered = session.getAllTools?.().map((tool) => tool.name) ?? [];
       return projectPiToolNames(mode, TOOL_IDS, registered, webSearch.enabled());
     },
-    onRunFinished: async (project, conversationId) => {
+    onBeforeRun: async (project, conversationId, turnId) => {
+      if (restoringProjects.has(project.id)) throw new Error("Workspace restoration is in progress");
+      await checkpoints.before(project, conversationId, turnId);
+    },
+    onRunFinished: async (project, conversationId, turnId) => {
+      try { await checkpoints.after(project, turnId); }
+      catch (cause) { app.log.error({ err: cause, projectId: project.id, turnId }, "Could not finalize Agent checkpoint"); }
       await agentPlaytests.get(`${project.id}:${conversationId}`)?.cleanup();
     },
     onRunCompleted: (project) => {
@@ -1428,6 +1438,52 @@ export function createApp(options: AppOptions = {}) {
         }
       }
       return projects.setMediaModelDefaults(project.id, request.body);
+    },
+  );
+
+  // Checkpoints are private project backups, never stored inside the user's workspace.
+  // Restore requires explicit confirmation and refuses to run alongside an Agent turn.
+  app.get<{ Params: { projectId: string } }>("/projects/:projectId/checkpoints", async (request, reply) => {
+    const project = projects.get(request.params.projectId);
+    if (!project) return reply.code(404).send({ error: "Project not found" });
+    try { return await checkpoints.list(project); }
+    catch (cause) { return reply.code(500).send({ error: cause instanceof Error ? cause.message : String(cause) }); }
+  });
+
+  const withCheckpointRestore = async <T,>(project: ProjectState, action: () => Promise<T>): Promise<T> => {
+    if (agents.isProjectBusy(project.id) || restoringProjects.has(project.id)) {
+      throw new Error("Wait for the Agent and previous restore to finish");
+    }
+    restoringProjects.add(project.id);
+    try {
+      await previews.stop(project, "settings");
+      const restored = await action();
+      await projects.touch(project.id);
+      agents.invalidateProjectSessions(project.id);
+      void previews.automatic(project, true).catch(() => undefined);
+      return restored;
+    } finally {
+      restoringProjects.delete(project.id);
+    }
+  };
+
+  app.post<{ Params: { projectId: string }; Body: { turnId: string; confirm: boolean } }>(
+    "/projects/:projectId/checkpoints/undo", async (request, reply) => {
+      const project = projects.get(request.params.projectId);
+      if (!project) return reply.code(404).send({ error: "Project not found" });
+      if (request.body?.confirm !== true || typeof request.body.turnId !== "string" || !request.body.turnId) return reply.code(400).send({ error: "Explicit confirmation and turnId are required" });
+      try { return await withCheckpointRestore(project, () => checkpoints.undo(project, request.body.turnId)); }
+      catch (cause) { return reply.code(cause instanceof CheckpointConflictError || /finish|not found|Recover/i.test(String(cause)) ? 409 : 500).send({ error: cause instanceof Error ? cause.message : String(cause) }); }
+    },
+  );
+
+  app.post<{ Params: { projectId: string }; Body: { commit: string; confirm: boolean } }>(
+    "/projects/:projectId/checkpoints/restore", async (request, reply) => {
+      const project = projects.get(request.params.projectId);
+      if (!project) return reply.code(404).send({ error: "Project not found" });
+      if (request.body?.confirm !== true || typeof request.body.commit !== "string") return reply.code(400).send({ error: "Explicit confirmation and checkpoint ID are required" });
+      try { return await withCheckpointRestore(project, () => checkpoints.restore(project, request.body.commit)); }
+      catch (cause) { return reply.code(cause instanceof CheckpointConflictError || /finish|not recorded|Invalid checkpoint/i.test(String(cause)) ? 409 : 500).send({ error: cause instanceof Error ? cause.message : String(cause) }); }
     },
   );
 

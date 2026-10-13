@@ -60,7 +60,7 @@ describe("checkpoint recovery API", () => {
     const started = new Promise<void>((resolve) => { entered = resolve; });
     const gate = new Promise<void>((resolve) => { release = resolve; });
     const { app, state, file } = await project(async (request) => {
-      if (request.method === "PATCH" && /^\\/projects\\/[0-9a-f-]+$/i.test(request.url)) {
+      if (request.method === "PATCH" && /^\/projects\/[0-9a-f-]+$/i.test(request.url)) {
         entered();
         await gate;
       }

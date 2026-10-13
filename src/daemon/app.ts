@@ -743,13 +743,18 @@ export function createApp(options: AppOptions = {}) {
       const registered = session.getAllTools?.().map((tool) => tool.name) ?? [];
       return projectPiToolNames(mode, TOOL_IDS, registered, webSearch.enabled());
     },
-    onBeforeRun: async (project, conversationId, turnId) => {
-      if (restoringProjects.has(project.id)) throw new Error("Workspace restoration is in progress");
-      await checkpoints.before(project, conversationId, turnId);
-    },
-    onRunFinished: async (project, conversationId, turnId) => {
-      try { await checkpoints.after(project, turnId); }
-      catch (cause) { app.log.error({ err: cause, projectId: project.id, turnId }, "Could not finalize Agent checkpoint"); }
+    // Injected sessions are an explicit test/dev override; normal Pi sessions always checkpoint.
+    ...(options.createSession ? {} : {
+      onBeforeRun: async (project: ProjectState, conversationId: string, turnId: string) => {
+        if (restoringProjects.has(project.id)) throw new Error("Workspace restoration is in progress");
+        await checkpoints.before(project, conversationId, turnId);
+      },
+      onAfterRun: async (project: ProjectState, _conversationId: string, turnId: string) => {
+        try { await checkpoints.after(project, turnId); }
+        catch (cause) { app.log.error({ err: cause, projectId: project.id, turnId }, "Could not finalize Agent checkpoint"); }
+      },
+    }),
+    onRunFinished: async (project, conversationId) => {
       await agentPlaytests.get(`${project.id}:${conversationId}`)?.cleanup();
     },
     onRunCompleted: (project) => {

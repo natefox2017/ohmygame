@@ -2,7 +2,8 @@ import { randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { ProjectState } from "../shared/contracts.js";
-import { CheckpointStore, checkpointDirectory, type CheckpointRestoreResult, type CheckpointUndoResult } from "./checkpoints.js";
+import { CheckpointStore, checkpointDirectory, type CheckpointChange, type CheckpointRestoreResult, type CheckpointUndoResult } from "./checkpoints.js";
+import { assertCheckpointCapacity, CHECKPOINT_MAX_BYTES, CHECKPOINT_MAX_TURNS, compactCheckpointHistory, recoverCheckpointRotation, type CheckpointLedger } from "./checkpoint-maintenance.js";
 
 const COMMIT_ID = /^[a-f0-9]{40}$/;
 
@@ -15,24 +16,22 @@ export interface AgentCheckpointTurn {
   finishedAt?: string;
 }
 
-interface CheckpointLedger {
-  version: 1;
-  turns: AgentCheckpointTurn[];
-  recoveries: Array<{ commit: string; createdAt: string }>;
-}
-
 /** Project-private manifest; snapshots themselves are kept in CheckpointStore's Git objects. */
 export class AgentCheckpoints {
   readonly #queues = new Map<string, Promise<unknown>>();
 
-  constructor(private readonly store = new CheckpointStore()) {}
+  constructor(
+    private readonly store = new CheckpointStore(),
+    private readonly maxBytes = CHECKPOINT_MAX_BYTES,
+  ) {}
 
   async before(project: ProjectState, conversationId: string, turnId: string): Promise<void> {
     await this.#serialize(project, async () => {
       const unfinished = await this.store.unfinished(project);
       if (unfinished) throw new Error("A previous checkpoint restore was interrupted; recover it before running the Agent");
-      const ledger = await this.#read(project);
+      let ledger = await this.#read(project);
       if (ledger.turns.some((entry) => entry.turnId === turnId)) throw new Error("An Agent checkpoint already exists for this turn");
+      ledger = await this.#prepare(project, ledger);
       // Do not permit the Agent to mutate files if creating a durable snapshot fails.
       const before = await this.store.snapshot(project);
       ledger.turns.push({ turnId, conversationId, before, startedAt: new Date().toISOString() });
@@ -45,19 +44,27 @@ export class AgentCheckpoints {
       const ledger = await this.#read(project);
       const entry = ledger.turns.find((turn) => turn.turnId === turnId);
       if (!entry || entry.after) return; // A failed setup never needs an undo range.
+      // If assets became too large during this turn, preserve the "before" snapshot
+      // and reject the next run instead of growing the private history unchecked.
+      await assertCheckpointCapacity(project, this.maxBytes);
       const after = await this.store.snapshot(project);
       entry.after = after;
       entry.finishedAt = new Date().toISOString();
       await this.#write(project, ledger);
+      if (ledger.turns.length > CHECKPOINT_MAX_TURNS) await compactCheckpointHistory(project, ledger);
     });
   }
 
-  async list(project: ProjectState): Promise<{ turns: AgentCheckpointTurn[]; recoveries: string[]; unfinished?: string }> {
+  async list(project: ProjectState): Promise<{ turns: Array<AgentCheckpointTurn & { changes?: CheckpointChange[] }>; recoveries: string[]; unfinished?: string }> {
     return this.#serialize(project, async () => {
       const ledger = await this.#read(project);
       const unfinished = await this.store.unfinished(project);
+      const turns = await Promise.all([...ledger.turns].reverse().map(async (turn) => ({
+        ...turn,
+        ...(turn.after ? { changes: await this.store.diff(project, turn.before, turn.after) } : {}),
+      })));
       return {
-        turns: [...ledger.turns].reverse(),
+        turns,
         recoveries: ledger.recoveries.map((item) => item.commit),
         ...(unfinished ? { unfinished } : {}),
       };
@@ -94,6 +101,33 @@ export class AgentCheckpoints {
     });
   }
 
+  /**
+   * Keep at most the most recent 20 turns. When space is scarce, first
+   * compact older completed history rather than deleting live game files.
+   * Recovery copies and the latest turn remain available.
+   */
+  async #prepare(project: ProjectState, history: CheckpointLedger): Promise<CheckpointLedger> {
+    let ledger = history;
+    if (ledger.turns.length > CHECKPOINT_MAX_TURNS) {
+      ledger = await compactCheckpointHistory(project, ledger);
+    }
+    try {
+      await assertCheckpointCapacity(project, this.maxBytes);
+      return ledger;
+    } catch (initialError) {
+      for (let retain = ledger.turns.length - 1; retain >= 1; retain -= 1) {
+        ledger = await compactCheckpointHistory(project, ledger, retain);
+        try {
+          await assertCheckpointCapacity(project, this.maxBytes);
+          return ledger;
+        } catch {
+          // Keep the last snapshot until there is enough space for a new one.
+        }
+      }
+      throw initialError;
+    }
+  }
+
   async #read(project: ProjectState): Promise<CheckpointLedger> {
     let raw: string;
     try {
@@ -128,7 +162,11 @@ export class AgentCheckpoints {
 
   #serialize<T>(project: ProjectState, action: () => Promise<T>): Promise<T> {
     const key = project.id;
-    const next = (this.#queues.get(key) ?? Promise.resolve()).then(action, action);
+    const safe = async () => {
+      await recoverCheckpointRotation(project);
+      return action();
+    };
+    const next = (this.#queues.get(key) ?? Promise.resolve()).then(safe, safe);
     const settled = next.catch(() => undefined);
     this.#queues.set(key, settled);
     void settled.then(() => { if (this.#queues.get(key) === settled) this.#queues.delete(key); });

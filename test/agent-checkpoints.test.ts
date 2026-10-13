@@ -127,6 +127,22 @@ describe("AgentCheckpoints", () => {
     expect(await readFile(file, "utf8")).not.toBe(last);
   });
 
+  it("preserves the previous snapshot store if the replacement is incomplete", async () => {
+    const { project, file } = await fixture();
+    const checkpoints = new AgentCheckpoints();
+    await checkpoints.before(project, "conversation", "turn-1");
+    await writeFile(file, "new\n");
+    await checkpoints.after(project, "turn-1");
+    const active = path.join(project.storagePath!, "checkpoints");
+    const previous = active + ".previous";
+    await rename(active, previous);
+    await mkdir(active);
+    await writeFile(path.join(active, "HEAD"), "ref: refs/heads/checkpoints\n");
+    await expect(new AgentCheckpoints().list(project)).rejects.toThrow("Incomplete checkpoint rotation");
+    expect((await readFile(path.join(previous, "agent-turns.json"), "utf8"))).toContain("turn-1");
+    expect(await readFile(file, "utf8")).toBe("new\n");
+  });
+
   it("recovers an interrupted disk rotation without losing the original ledger", async () => {
     const { project, file } = await fixture();
     const checkpoints = new AgentCheckpoints();

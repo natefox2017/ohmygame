@@ -39,6 +39,9 @@ export async function recoverCheckpointRotation(project: Pick<ProjectState, "wor
   if (await exists(active)) {
     if (await exists(next)) await rm(next, { recursive: true, force: true });
     if (await exists(previous)) await rm(previous, { recursive: true, force: true });
+  } else if (await exists(next)) {
+    // A first-time compaction that never reached rotation left no live store.
+    await rm(next, { recursive: true, force: true });
   }
 }
 
@@ -85,10 +88,11 @@ export async function assertCheckpointCapacity(
   const bytes = await workspaceBytes(project.workspacePath);
   const used = await bytesUsed(checkpointDirectory(project));
   // Allow a small margin for tree/commit metadata and compressed-file overhead.
-  if (used + bytes + 1024 * 1024 > maxBytes) {
+  if (used + bytes + Math.min(1024 * 1024, Math.floor(maxBytes * 0.01)) > maxBytes) {
     throw new Error(`Checkpoint limit reached (${Math.round(maxBytes / (1024 * 1024))} MiB per project). Clear old checkpoints through the application's recovery history, or free local disk space; game files were not touched.`);
   }
   const storage = project.storagePath ?? path.dirname(project.workspacePath);
+  await mkdir(storage, { recursive: true, mode: 0o700 });
   const disk = await statfs(storage);
   if (Number(disk.bavail) * Number(disk.bsize) < bytes + FREE_SPACE_RESERVE) {
     throw new Error("Not enough free local disk space for a safe game checkpoint. Free disk space before asking the Agent to change files.");

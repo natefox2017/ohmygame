@@ -89,7 +89,7 @@ export async function assertCheckpointCapacity(
   const used = await bytesUsed(checkpointDirectory(project));
   // Allow a small margin for tree/commit metadata and compressed-file overhead.
   if (used + bytes + Math.min(1024 * 1024, Math.floor(maxBytes * 0.01)) > maxBytes) {
-    throw new Error(`Checkpoint limit reached (${Math.round(maxBytes / (1024 * 1024))} MiB per project). Clear old checkpoints through the application's recovery history, or free local disk space; game files were not touched.`);
+    throw new Error(`Checkpoint limit reached (${Math.round(maxBytes / (1024 * 1024))} MiB per project). Keep the project within its checkpoint budget or free local disk space before another Agent run; game files and existing recovery points were not touched.`);
   }
   const storage = project.storagePath ?? path.dirname(project.workspacePath);
   await mkdir(storage, { recursive: true, mode: 0o700 });

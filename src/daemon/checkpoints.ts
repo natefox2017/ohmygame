@@ -522,8 +522,14 @@ export class CheckpointStore {
           if (attempt === READ_ATTEMPTS) oid = await writeFileCopyBlob(walk.gitdir, absolute);
         }
         const after = await fromSource(lstat(absolute));
-        // A large file was read twice with the same result, which shows well enough that it held still.
-        const changed = !oid || (stats.size <= BUFFERED_BYTES && !sameFile(stats, after));
+        // On file systems with coarse timestamps an in-place rewrite of the same size
+        // can have identical stat signatures. Rehash recently changed small files.
+        // Large files already undergo a two-pass write and hash verification.
+        const unsettled = Math.max(stats.mtimeMs, stats.ctimeMs) > walk.started - UNSETTLED_MS;
+        const changedContent = oid && unsettled && after.isFile() && after.size <= BUFFERED_BYTES
+          ? await fileBlobId(absolute, after.size).then((current) => current !== oid)
+          : false;
+        const changed = !oid || (stats.size <= BUFFERED_BYTES && !sameFile(stats, after)) || changedContent;
         if (attempt < READ_ATTEMPTS && changed) {
           stats = after;
           continue;

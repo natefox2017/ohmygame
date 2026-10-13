@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -81,4 +81,46 @@ describe("AgentCheckpoints", () => {
     await writeFile(file, '{"version":1,"turns":"invalid"}');
     await expect(new AgentCheckpoints().before(project, "c", "t")).rejects.toThrow("damaged");
   });
+  it("compacts old snapshots while preserving the 20 latest turns and reversible recovery", async () => {
+    const { project, file } = await fixture();
+    const checkpoints = new AgentCheckpoints();
+    for (let index = 0; index < 22; index += 1) {
+      const id = `turn-${index}`;
+      await checkpoints.before(project, "conversation", id);
+      await writeFile(file, `revision ${index}\n`);
+      await checkpoints.after(project, id);
+    }
+    const history = await new AgentCheckpoints().list(project);
+    expect(history.turns).toHaveLength(20);
+    expect(history.turns[0]?.turnId).toBe("turn-21");
+    expect(history.turns.at(-1)?.turnId).toBe("turn-2");
+    expect(history.turns[0]?.changes).toEqual([{ path: "game.txt", kind: "modified" }]);
+    const undone = await checkpoints.undo(project, "turn-21");
+    expect(await readFile(file, "utf8")).toBe("revision 20\n");
+    await new AgentCheckpoints().restore(project, undone.previous);
+    expect(await readFile(file, "utf8")).toBe("revision 21\n");
+  });
+
+  it("fails closed when the quota cannot fit a full checkpoint", async () => {
+    const { project, file } = await fixture();
+    const checkpoints = new AgentCheckpoints(undefined, 8);
+    await expect(checkpoints.before(project, "conversation", "turn-1")).rejects.toThrow("Checkpoint limit reached");
+    expect(await readFile(file, "utf8")).toBe("version one\n");
+    expect((await new AgentCheckpoints().list(project)).turns).toEqual([]);
+  });
+
+  it("recovers an interrupted disk rotation without losing the original ledger", async () => {
+    const { project, file } = await fixture();
+    const checkpoints = new AgentCheckpoints();
+    await checkpoints.before(project, "conversation", "turn-1");
+    await writeFile(file, "new\n");
+    await checkpoints.after(project, "turn-1");
+    const folder = path.join(project.storagePath!, "checkpoints");
+    await rename(folder, folder + ".previous");
+    const recovered = new AgentCheckpoints();
+    expect((await recovered.list(project)).turns[0]?.after).toMatch(/^[a-f0-9]{40}$/);
+    await recovered.undo(project, "turn-1");
+    expect(await readFile(file, "utf8")).toBe("version one\n");
+  });
+
 });

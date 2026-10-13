@@ -268,6 +268,19 @@ export async function listProviders(): Promise<ProviderSummary[]> {
   return request("/settings/providers");
 }
 
+/** Official Codex CLI sign-in, not the Pi OpenAI language-model account. */
+export function getCodexImageConnection(refresh = false): Promise<CodexImageConnectionStatus> {
+  return request(`/settings/models/providers/codex-app-server/status${refresh ? "?refresh=true" : ""}`);
+}
+
+export function connectCodexImages(): Promise<CodexImageConnectionStatus> {
+  return request("/settings/models/providers/codex-app-server/login", { method: "POST" });
+}
+
+export async function cancelCodexImageLogin(): Promise<void> {
+  await request("/settings/models/providers/codex-app-server/login", { method: "DELETE" });
+}
+
 export async function setProviderEnabled(providerId: string, enabled: boolean): Promise<ProviderSummary> {
   const result = await request<ProviderSummary>(`/settings/models/providers/${encodeURIComponent(providerId)}/enabled`, { method: "PATCH", body: JSON.stringify({ enabled }) });
   notifyAgentModelsChanged();

@@ -41,6 +41,23 @@ Node.js 22.19.0/npm distribution for workspace commands and MCP servers.
 New workspaces still default to npm, and existing package-manager choices remain
 authoritative. Prepared examples retain their npm lockfiles.
 
+### Updating bundled example games
+
+Example source projects and artwork are maintained separately in
+[WhiteTowerAI/ohmygame-examples](https://github.com/WhiteTowerAI/ohmygame-examples).
+`config/examples.json` pins the exact upstream commit; `bun run
+prepare:examples --require` downloads that SHA and builds its games into the
+ignored local `.runtime/examples` directory for packaging. The game source
+and binary covers are **not** duplicated in the OhMyGame code repository.
+
+`.github/workflows/sync-examples.yml` checks the examples upstream main once
+daily at 04:43 UTC. A change is written to `config/examples.json` on main
+only after all pinned examples and the entire application can be built and the
+existing typecheck, test, and Node-runtime suites pass. Failed downloads,
+compilation, CI checks, or concurrent main updates abort without changing main.
+PRs changing the example pin also run the examples packaging check. Existing
+OhMyGame code sync stays at its separate three-hour schedule.
+
 Build and test commands select Bun explicitly. `bunfig.toml` disables automatic
 dotenv loading, automatic peer installation, and global Node-to-Bun substitution,
 so a daemon's `node` command runs the real Node executable. Runtime preparation

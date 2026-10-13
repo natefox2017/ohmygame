@@ -1,5 +1,7 @@
 // @vitest-environment happy-dom
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { act, createElement } from "react";
+import { createRoot, type Root } from "react-dom/client";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ProjectState } from "../src/shared/contracts.js";
 
 const api = vi.hoisted(() => ({
@@ -8,14 +10,19 @@ const api = vi.hoisted(() => ({
   restoreProjectCheckpoint: vi.fn(),
 }));
 vi.mock("../src/renderer/api.js", () => api);
-import { restoreCheckpointFromProjectMenu } from "../src/renderer/checkpoint-restore.js";
+import { ProjectCheckpointDialog } from "../src/renderer/checkpoint-restore.js";
 
 const project = { id: "00000000-0000-4000-8000-000000000000", name: "Test game" } as ProjectState;
+let host: HTMLDivElement;
+let root: Root;
+let recovered: ReturnType<typeof vi.fn>;
+
 beforeEach(() => {
   vi.resetAllMocks();
-  vi.stubGlobal("alert", vi.fn());
-  vi.stubGlobal("confirm", vi.fn(() => true));
-  vi.stubGlobal("prompt", vi.fn(() => "1"));
+  host = document.createElement("div");
+  document.body.appendChild(host);
+  root = createRoot(host);
+  recovered = vi.fn();
   api.listProjectCheckpoints.mockResolvedValue({
     turns: [{ turnId: "turn-1", conversationId: "conversation", startedAt: "2026-10-13T00:00:00Z",
       before: "a".repeat(40), after: "b".repeat(40), changes: [{ path: "game.ts", kind: "modified" }] }],
@@ -25,24 +32,50 @@ beforeEach(() => {
   api.restoreProjectCheckpoint.mockResolvedValue({ previous: "a".repeat(40), changed: ["game.ts"] });
 });
 
-describe("project recovery menu", () => {
-  it("shows modified files and uses the confirmed undo endpoint", async () => {
-    expect(await restoreCheckpointFromProjectMenu(project)).toBe(true);
-    expect(window.prompt).toHaveBeenCalledWith(expect.stringContaining("game.ts"), "1");
-    expect(api.undoProjectCheckpoint).toHaveBeenCalledWith(project.id, "turn-1");
-    expect(api.restoreProjectCheckpoint).not.toHaveBeenCalled();
-  });
+afterEach(async () => {
+  await act(async () => { root.unmount(); });
+  host.remove();
+});
 
-  it("does not send destructive requests without confirmation", async () => {
-    vi.stubGlobal("confirm", vi.fn(() => false));
-    expect(await restoreCheckpointFromProjectMenu(project)).toBe(false);
+async function openDialog() {
+  await act(async () => {
+    root.render(createElement(ProjectCheckpointDialog, { project, onClose: vi.fn(), onRecovered: recovered }));
+  });
+}
+
+async function clickLabel(part: string) {
+  const button = [...host.querySelectorAll("button")].find((item) => item.textContent?.includes(part));
+  expect(button, `Missing button: ${part}`).toBeTruthy();
+  await act(async () => { button!.click(); });
+}
+
+describe("project checkpoint modal", () => {
+  it("shows files, requires two-step confirmation, then calls the undo endpoint", async () => {
+    await openDialog();
+    expect(host.textContent).toContain("game.ts");
+    await clickLabel("Undo Agent turn");
+    await clickLabel("Continue");
     expect(api.undoProjectCheckpoint).not.toHaveBeenCalled();
-    expect(api.restoreProjectCheckpoint).not.toHaveBeenCalled();
+    expect(host.textContent).toContain("Confirm recovery");
+    await clickLabel("Confirm restore");
+    expect(api.undoProjectCheckpoint).toHaveBeenCalledWith(project.id, "turn-1");
+    expect(recovered).toHaveBeenCalled();
   });
 
-  it("can restore an interrupted operation using its preserved checkpoint", async () => {
+  it("never sends destructive calls when no recovery point was selected", async () => {
+    await openDialog();
+    const continueButton = [...host.querySelectorAll("button")].find((button) => button.textContent?.includes("Continue"));
+    expect(continueButton?.disabled).toBe(true);
+    expect(api.undoProjectCheckpoint).not.toHaveBeenCalled();
+  });
+
+  it("offers a safe explicit action for a previous interrupted restore", async () => {
     api.listProjectCheckpoints.mockResolvedValueOnce({ turns: [], recoveries: [], unfinished: "c".repeat(40) });
-    expect(await restoreCheckpointFromProjectMenu(project)).toBe(true);
+    await openDialog();
+    expect(host.textContent).toContain("Recover interrupted restore");
+    await clickLabel("Recover interrupted restore");
+    await clickLabel("Continue");
+    await clickLabel("Confirm restore");
     expect(api.restoreProjectCheckpoint).toHaveBeenCalledWith(project.id, "c".repeat(40));
   });
 });

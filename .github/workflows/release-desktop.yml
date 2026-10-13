@@ -1,9 +1,10 @@
 name: Release desktop
 
+# Release packaging is paused during development. Pushing a version tag
+# must not start macOS/Windows installer builds or publishing. Keep the
+# platform jobs and signing configuration intact for later re-enablement.
 on:
-  push:
-    tags:
-      - "v*"
+  workflow_dispatch:
 
 permissions:
   contents: read

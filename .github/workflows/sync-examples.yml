@@ -1,0 +1,164 @@
+# Keep downloadable examples pinned to a tested upstream commit instead of
+# checking large example projects and binary artwork into this repository.
+name: Sync upstream examples
+
+on:
+  schedule:
+    # Daily at 04:43 UTC; outside the three-hour main-upstream sync window.
+    - cron: "43 4 * * *"
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - config/examples.json
+      - scripts/prepare-examples.ts
+      - .github/workflows/sync-examples.yml
+
+permissions:
+  contents: read
+
+jobs:
+  verify-example-pin:
+    if: github.event_name == 'pull_request'
+    runs-on: [self-hosted, linux, x64, grok-box]
+    timeout-minutes: 60
+    concurrency:
+      group: verify-example-pin-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.19.0"
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+      - name: Install application dependencies
+        run: bun install --frozen-lockfile
+      - name: Fetch and build every pinned example (fail closed)
+        run: bun run prepare:examples --require
+      - name: Verify complete application build
+        run: bun run build
+
+  sync:
+    if: github.event_name != 'pull_request'
+    # The normal three-hour upstream sync writes to the same main branch.
+    # Use its concurrency group to serialize both writers.
+    concurrency:
+      group: upstream-main-sync
+      cancel-in-progress: false
+    runs-on: [self-hosted, linux, x64, grok-box]
+    timeout-minutes: 90
+    permissions:
+      contents: write
+    steps:
+      - name: Check out downstream main
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Read the upstream examples commit
+        id: check
+        shell: bash
+        run: |
+          set -euo pipefail
+          upstream="$(git ls-remote https://github.com/WhiteTowerAI/ohmygame-examples.git refs/heads/main | awk '{print $1}')"
+          [[ "$upstream" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::Could not resolve upstream examples/main"; exit 1; }
+          current="$(node -p "require('./config/examples.json').commit")"
+          echo "upstream_sha=$upstream" >> "$GITHUB_OUTPUT"
+          echo "Current examples: $current; upstream: $upstream"
+          if [[ "$current" == "$upstream" ]]; then
+            echo "updated=false" >> "$GITHUB_OUTPUT"
+            echo "Examples already pinned to the upstream commit."
+          else
+            echo "updated=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Update only the trusted examples lock file
+        if: steps.check.outputs.updated == 'true'
+        env:
+          UPSTREAM_SHA: ${{ steps.check.outputs.upstream_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --input-type=module <<'NODE'
+          import { readFileSync, writeFileSync } from "node:fs";
+          const file = "config/examples.json";
+          const config = JSON.parse(readFileSync(file, "utf8"));
+          const sha = process.env.UPSTREAM_SHA;
+          if (config.version !== 1 || config.repository !== "WhiteTowerAI/ohmygame-examples" || !/^[0-9a-f]{40}$/.test(sha ?? "")) {
+            throw new Error("Unexpected examples lock configuration or upstream commit");
+          }
+          config.commit = sha;
+          writeFileSync(file, JSON.stringify(config, null, 2) + "\n");
+          NODE
+          test "$(git diff --name-only)" = "config/examples.json" || { echo "::error::Unexpected files changed"; exit 1; }
+
+      - name: Set up Node.js
+        if: steps.check.outputs.updated == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22.19.0"
+
+      - name: Set up Bun
+        if: steps.check.outputs.updated == 'true'
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.4.2"
+
+      - name: Install application dependencies
+        if: steps.check.outputs.updated == 'true'
+        run: bun install --frozen-lockfile
+
+      - name: Fetch and build every example from the exact pinned SHA
+        if: steps.check.outputs.updated == 'true'
+        run: bun run prepare:examples --require
+
+      - name: Validate full application and runtime
+        if: steps.check.outputs.updated == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bun run prepare:preinstalled-plugins
+          bun run typecheck
+          bun run test
+          bun run build
+          bun run test:node-runtime
+
+      - name: Push only the tested pin; refuse concurrent main changes
+        if: steps.check.outputs.updated == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin main
+          if [[ "$(git rev-parse origin/main)" != "$(git rev-parse HEAD)" ]]; then
+            echo "::error::main moved while validating examples; retry on the next run instead of overwriting it."
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- config/examples.json
+          git diff --cached --name-only | grep -Fxq "config/examples.json"
+          git commit -m "chore(examples): sync verified upstream examples"
+          gh auth setup-git
+          git push origin HEAD:refs/heads/main
+
+      - name: Summarize sync
+        if: always()
+        env:
+          UPSTREAM_SHA: ${{ steps.check.outputs.upstream_sha }}
+          UPDATED: ${{ steps.check.outputs.updated }}
+          RUN_STATUS: ${{ job.status }}
+        shell: bash
+        run: |
+          {
+            echo "### Example repository sync"
+            echo "- Source: WhiteTowerAI/ohmygame-examples"
+            echo "- Upstream commit: \`${UPSTREAM_SHA:-unavailable}\`"
+            echo "- Change detected: \`${UPDATED:-unknown}\`"
+            echo "- Job status: \`$RUN_STATUS\`"
+            echo "- Unverified updates are never pushed."
+          } >> "$GITHUB_STEP_SUMMARY"

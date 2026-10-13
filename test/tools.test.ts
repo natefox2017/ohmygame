@@ -449,12 +449,16 @@ describe("tool runner", () => {
       url: "/tools/generate-image/jobs",
       payload: { prompt: `Image ${index}` },
     })));
+    // Each background job persists its state through a serialized disk-write
+    // queue before finishing. On a loaded CI runner, 21 jobs can legitimately
+    // take longer than waitFor's 1s default; verify the final cap after all
+    // jobs complete rather than treating transient running jobs as a leak.
     await vi.waitFor(async () => {
       const jobs = (await app.inject({ method: "GET", url: "/tool-jobs" })).json();
       expect(jobs).toHaveLength(20);
       expect(jobs.every((job: { status: string }) => job.status === "succeeded")).toBe(true);
-    });
-  });
+    }, { timeout: 15_000, interval: 100 });
+  }, 20_000);
 
 });
 

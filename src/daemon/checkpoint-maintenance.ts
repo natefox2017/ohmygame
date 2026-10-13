@@ -56,7 +56,25 @@ async function rotatedStoreUsable(directory: string): Promise<boolean> {
   try {
     const head = await readHead(directory);
     if (!head) return false;
-    await readTree(directory, await readCommitTree(directory, head));
+    const checkedTrees = new Set<string>();
+    const checkedBlobs = new Set<string>();
+    const verifyTree = async (tree: string): Promise<void> => {
+      if (checkedTrees.has(tree)) return;
+      const entries = await readTree(directory, tree);
+      checkedTrees.add(tree);
+      for (const entry of entries) {
+        if (!/^[a-f0-9]{40}$/.test(entry.oid) || !entry.name || entry.name === "." || entry.name === ".."
+          || entry.name.includes("/") || entry.name.includes("\\") || !["40000", "100644", "100755", "120000"].includes(entry.mode)) {
+          throw new Error("Invalid checkpoint tree entry");
+        }
+        if (entry.mode === TREE_MODE) await verifyTree(entry.oid);
+        else if (!checkedBlobs.has(entry.oid)) {
+          await verifyBlob(directory, entry.oid);
+          checkedBlobs.add(entry.oid);
+        }
+      }
+    };
+    await verifyTree(await readCommitTree(directory, head));
     const raw: unknown = JSON.parse(await readFile(path.join(directory, "agent-turns.json"), "utf8"));
     if (!raw || typeof raw !== "object") return false;
     const ledger = raw as Partial<CheckpointLedger>;
@@ -67,7 +85,7 @@ async function rotatedStoreUsable(directory: string): Promise<boolean> {
     ];
     for (const id of commitIds) {
       if (!/^[a-f0-9]{40}$/.test(id)) return false;
-      await readTree(directory, await readCommitTree(directory, id));
+      await verifyTree(await readCommitTree(directory, id));
     }
     return true;
   } catch {
@@ -204,10 +222,15 @@ export async function compactCheckpointHistory(
       recoveries: keptRecoveries.map((entry) => ({ ...entry, commit: mapId(entry.commit) })),
     };
     await writeFile(path.join(next, "agent-turns.json"), JSON.stringify(updated, null, 2) + "\n", { mode: 0o600, flag: "wx" });
+    // Verify not just commit/tree metadata, but every reachable image/code blob
+    // before the old store can be displaced or discarded.
+    if (!(await rotatedStoreUsable(next))) throw new Error("Checkpoint rotation failed verification; existing snapshots were preserved");
     await rename(active, previous);
     try { await rename(next, active); }
     catch (cause) { await rename(previous, active); throw cause; }
-    // A crash before cleanup leaves .previous, cleaned at the next operation.
+    // A crash or disk fault during rotation must not delete the sole known-good
+    // archive. Keep .previous until the installed replacement verifies too.
+    if (!(await rotatedStoreUsable(active))) throw new Error("Incomplete checkpoint rotation: previous recovery store was preserved");
     await rm(previous, { recursive: true, force: true }).catch(() => {});
     return updated;
   } catch (cause) {

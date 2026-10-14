@@ -1,0 +1,86 @@
+# This one-shot integration workflow exists only on the named review branch.
+# It stages upstream changes for human/code review; it never pushes to main.
+name: Stage upstream beta.4.7 review
+
+on:
+  push:
+    branches:
+      - chore/upstream-beta-4-7-review
+    paths:
+      - .github/workflows/upstream-beta-integration-once.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: stage-upstream-beta-4-7
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    if: github.repository == 'natefox2017/ohmygame' && github.ref == 'refs/heads/chore/upstream-beta-4-7-review'
+    runs-on: [self-hosted, linux, x64, grok-box]
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chore/upstream-beta-4-7-review
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Create a reviewable two-parent integration commit
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git remote add upstream https://github.com/WhiteTowerAI/ohmygame.git
+          git fetch --no-tags upstream main
+          actual="$(git rev-parse upstream/main)"
+          expected="29bd5d4747064cf30432c09d64510e00629bced5"
+          if [[ "$actual" != "$expected" ]]; then
+            echo "::error::Upstream HEAD changed to $actual; refuse unintended source and review a fresh upstream commit."
+            exit 1
+          fi
+          {
+            echo "### Merging upstream for review"
+            echo "Downstream starting SHA: $(git rev-parse HEAD)"
+            echo "Upstream pinned SHA: $actual"
+            echo "Conflict policy: Git -X ours, only as a draft merge starting point; all overlapping hunks require review."
+          } >> "$GITHUB_STEP_SUMMARY"
+          # -X ours resolves only overlapping hunks in favor of the downstream
+          # content, while retaining all non-overlapping upstream changes.
+          # No changes are pushed to main. The review PR must examine ALL
+          # overlapping files for skipped upstream bugfixes before merge.
+          git merge --no-ff --no-edit -X ours upstream/main
+          # Remove this disposable privileged job before pushing the result.
+          git rm .github/workflows/upstream-beta-integration-once.yml
+          git commit -m "chore(sync): remove temporary upstream staging workflow"
+          git diff --check HEAD~2 HEAD
+          echo "Review tree: $(git rev-parse HEAD)" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Publish review branch only
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh auth setup-git
+          git push origin HEAD:refs/heads/chore/upstream-beta-4-7-review
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.19.0'
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.4.2'
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Validate upstream + downstream integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          bun run prepare:preinstalled-plugins
+          bun run typecheck
+          bun run test
+          bun run test:node-runtime
+          bun run build

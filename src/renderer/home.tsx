@@ -6,6 +6,7 @@ import { deleteProject, duplicateProject, listProjects, renameProject, waitForRu
 import { ExampleShelf, useExamples } from "./examples.js";
 import { AppSidebar } from "./app-sidebar.js";
 import { ProjectCard } from "./project-card.js";
+import { ProjectCheckpointDialog } from "./checkpoint-restore.js";
 import { ProjectCreateDialog } from "./project-create-dialog.js";
 import { ProjectRenameDialog } from "./project-rename-dialog.js";
 import { projectDeletionConfirmation } from "./project-deletion.js";
@@ -33,6 +34,7 @@ export function Home({ onNavigate, onCreate, onOpen }: HomeProps) {
   const [projectType, setProjectType] = useState<ProjectType>("web-game");
   const [createOpen, setCreateOpen] = useState(false);
   const [renameTarget, setRenameTarget] = useState<ProjectState>();
+  const [restoreTarget, setRestoreTarget] = useState<ProjectState>();
   const renameTrigger = useRef<HTMLElement | null>(null);
   const { examples, covers: exampleCovers } = useExamples();
   const { sectionRef, columns, recentProjectLimit } = useProjectShelfLayout();
@@ -131,7 +133,7 @@ export function Home({ onNavigate, onCreate, onOpen }: HomeProps) {
                   actions={{ onRename: () => {
                     renameTrigger.current = document.querySelector<HTMLElement>('.project-card-menu[aria-expanded="true"]');
                     setRenameTarget(project);
-                  }, onDuplicate: () => void duplicate(project), onDelete: () => void remove(project) }}
+                  }, onDuplicate: () => void duplicate(project), onDelete: () => void remove(project), onRestore: () => setRestoreTarget(project) }}
                 />
               ))}
             </div>
@@ -143,6 +145,8 @@ export function Home({ onNavigate, onCreate, onOpen }: HomeProps) {
           <ExampleShelf examples={visibleExamples} covers={exampleCovers} showType onOpenProject={onOpen} />
         </section> : null}
       </section>
+      {restoreTarget ? <ProjectCheckpointDialog project={restoreTarget} onClose={() => setRestoreTarget(undefined)}
+        onRecovered={() => { setRestoreTarget(undefined); void loadProjects(); }} /> : null}
       {renameTarget ? <ProjectRenameDialog name={renameTarget.name} returnFocus={renameTrigger.current} onClose={() => setRenameTarget(undefined)} onConfirm={(name) => {
         const project = renameTarget;
         setRenameTarget(undefined);

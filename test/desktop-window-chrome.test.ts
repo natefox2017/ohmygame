@@ -46,6 +46,10 @@ vi.mock("electron", () => ({
     fromPartition: () => ({ setProxy: async () => {} }),
     defaultSession: { setProxy: async () => {} },
   },
+  screen: {
+    getCursorScreenPoint: () => ({ x: 480, y: 320 }),
+    getDisplayNearestPoint: () => ({ workArea: { x: 0, y: 0, width: 1920, height: 1080 } }),
+  },
   BrowserWindow: Object.assign(
     class {
       readonly options: Record<string, unknown>;

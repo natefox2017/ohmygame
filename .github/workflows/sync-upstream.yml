@@ -34,6 +34,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          # Self-hosted worktrees may retain remotes from earlier scheduled runs.
+          git remote remove upstream 2>/dev/null || true
           git remote add upstream https://github.com/WhiteTowerAI/ohmygame.git
           git fetch --no-tags upstream main
           echo "downstream_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"

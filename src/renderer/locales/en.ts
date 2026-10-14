@@ -721,6 +721,7 @@ const en = {
     agentStatus: "Agent {{status}}",
     actions: "Project actions for {{name}}",
     gameDesign: "Game design",
+    restoreVersion: "Restore version",
     remove: "Remove from OhMyGame",
     editedJustNow: "Edited just now",
     editedMinutes: "Edited {{count}}m ago",

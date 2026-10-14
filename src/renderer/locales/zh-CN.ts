@@ -702,6 +702,7 @@ const zhCN: typeof en = {
     agentStatus: "Agent {{status}}",
     actions: "{{name}} 的项目操作",
     gameDesign: "游戏设计",
+    restoreVersion: "恢复历史版本",
     remove: "从 OhMyGame 移除",
     editedJustNow: "刚刚编辑",
     editedMinutes: "{{count}} 分钟前编辑",

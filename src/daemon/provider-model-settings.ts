@@ -22,6 +22,7 @@ export class ProviderModelSettingsStore {
   #disabled: string[] = [];
   // Subscription image generation requires a deliberate opt-in from Settings.
   #codexImagesEnabled = false;
+  #responsesTransports: Record<string, ResponsesTransportMode> = {};
   #customProviders: CustomProviderRegistry = {};
   #nativeModels3D: Partial<Record<Native3DProviderId, Model3DDefinition[]>> = {};
   #defaultImageModel?: ModelRef;
@@ -37,7 +38,7 @@ export class ProviderModelSettingsStore {
   async load(): Promise<void> {
     const text = await readOptional(this.#preferencesPath);
     if (!text) return;
-    const stored = JSON.parse(text) as { version?: unknown; hidden?: unknown; disabled?: unknown; customProviders?: unknown; nativeModels3D?: unknown; defaultImageModel?: unknown; defaultVideoModel?: unknown; defaultModel3D?: unknown; codexImagesEnabled?: unknown };
+    const stored = JSON.parse(text) as { version?: unknown; hidden?: unknown; disabled?: unknown; customProviders?: unknown; nativeModels3D?: unknown; defaultImageModel?: unknown; defaultVideoModel?: unknown; defaultModel3D?: unknown; codexImagesEnabled?: unknown; responsesTransports?: unknown };
     if (stored.version !== 1 || !isObject(stored.hidden) || Object.values(stored.hidden).some((ids) => !Array.isArray(ids) || ids.some((id) => typeof id !== "string"))) throw new Error("Invalid model visibility settings");
     this.#hidden = stored.hidden as Record<string, string[]>;
     if (stored.disabled !== undefined && (!Array.isArray(stored.disabled) || stored.disabled.some((id) => typeof id !== "string"))) throw new Error("Invalid disabled providers");
@@ -45,6 +46,12 @@ export class ProviderModelSettingsStore {
     this.#disabled = (stored.disabled ?? []) as string[];
     if (stored.codexImagesEnabled !== undefined && typeof stored.codexImagesEnabled !== "boolean") throw new Error("Invalid Codex image provider preference");
     this.#codexImagesEnabled = stored.codexImagesEnabled === true;
+    // Treat malformed optional transport preferences as absent. Never hide
+    // otherwise valid provider configuration because one mode is invalid.
+    this.#responsesTransports = Object.fromEntries(
+      Object.entries(isObject(stored.responsesTransports) ? stored.responsesTransports : {})
+        .filter(([, mode]) => RESPONSES_TRANSPORT_MODES.includes(mode as ResponsesTransportMode)),
+    ) as Record<string, ResponsesTransportMode>;
     this.#customProviders = (stored.customProviders ?? {}) as CustomProviderRegistry;
     if (stored.nativeModels3D !== undefined) {
       if (!isObject(stored.nativeModels3D)) throw new Error("Invalid native 3D models");
@@ -310,7 +317,7 @@ export class ProviderModelSettingsStore {
   }
 
   #preferences(overrides: JsonObject = {}): string {
-    return `${JSON.stringify({ version: 1, hidden: this.#hidden, disabled: this.#disabled, codexImagesEnabled: this.#codexImagesEnabled, customProviders: this.#customProviders, nativeModels3D: this.#nativeModels3D, defaultImageModel: this.#defaultImageModel, defaultVideoModel: this.#defaultVideoModel, defaultModel3D: this.#defaultModel3D, ...overrides }, null, 2)}\n`;
+    return `${JSON.stringify({ version: 1, hidden: this.#hidden, disabled: this.#disabled, codexImagesEnabled: this.#codexImagesEnabled, responsesTransports: this.#responsesTransports, customProviders: this.#customProviders, nativeModels3D: this.#nativeModels3D, defaultImageModel: this.#defaultImageModel, defaultVideoModel: this.#defaultVideoModel, defaultModel3D: this.#defaultModel3D, ...overrides }, null, 2)}\n`;
   }
 
   #writePreferences(overrides: JsonObject): Promise<void> {

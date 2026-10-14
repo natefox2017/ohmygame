@@ -2095,6 +2095,34 @@ export function createApp(options: AppOptions = {}) {
     return [...providers, ...directProviders, codexProvider, ...await cloudModels.providers(providerEnabled)].sort((left, right) => left.name.localeCompare(right.name));
   };
   app.get("/settings/providers", providerSummaries);
+  // Upstream's independent OpenAI Images connection must coexist with our
+  // optional Codex / ChatGPT image provider, not replace its routes.
+  registerOpenAIImageRoutes(app, openAIImages, imageConnection, options.modelDiscoveryFetch);
+  app.get("/settings/onboarding", async () => {
+    if (!onboarding.initialized) {
+      const existingSetup = projects.list().length > 0 || (await providerSummaries())
+        .some((provider) => ("languageConfigured" in provider ? provider.languageConfigured ?? provider.configured : provider.configured)
+          && provider.capabilities.some((capability) => capability === "language"));
+      await onboarding.initialize(existingSetup
+        ? { status: "completed", step: "connect" }
+        : { status: "pending", step: "welcome" });
+    }
+    return onboarding.get();
+  });
+  app.put<{ Body: UpdateOnboardingRequest }>("/settings/onboarding", {
+    schema: { body: {
+      type: "object", additionalProperties: false, required: ["status", "step"],
+      properties: { status: { enum: ["pending", "completed", "skipped"] }, step: { enum: ["welcome", "connect"] } },
+    } },
+  }, async (request, reply) => {
+    if (request.body.status === "completed") {
+      const runtime = await getModelRuntime();
+      const available = resolveModels(runtime, (await runtime.getAvailable()).filter((model) => providerEnabled(model.provider)))
+        .filter((model) => providerModelSettings.isVisible(model));
+      if (!available.length) return reply.code(409).send({ error: "Connect a language model before completing setup." });
+    }
+    return onboarding.update(request.body);
+  });
   app.get<{ Querystring: { refresh?: string } }>("/settings/models/providers/codex-app-server/status", async (request) => ({
     ...await codexImages.connection(request.query.refresh === "true"),
     enabled: providerEnabled("codex-app-server"),

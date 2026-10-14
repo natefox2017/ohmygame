@@ -837,9 +837,10 @@ function ConnectedProvider({ provider, onBack, onRemoved }: { provider: Provider
       </div> : null}
       {displayedError ? <p className="settings-error" role="alert">{displayedError}</p> : null}
       {notice ? <p className="settings-success" role="status">{notice}</p> : null}
-      <ProviderModels key={modelsRevision} providerId={provider.id} />
-      {provider.id === "openai" && credentialType === "oauth" ? <p className="settings-detail-hint">ChatGPT browser sign-in provides coding models, not the OpenAI Images API. To use image generation through your ChatGPT subscription, go back to Providers &amp; Models → Image and connect Codex · ChatGPT Images separately.</p> : null}
-      {provider.capabilities.includes("image") ? <ProviderImageModels key={`images-${modelsRevision}`} providerId={provider.id} /> : null}
+      {provider.id === "openai" && chatConnected ? <ProviderResponsesTransport providerId={provider.id} disabled={deletion.busy || Boolean(editing)} /> : null}
+      {chatConnected ? <ProviderModels key={modelsRevision} providerId={provider.id} /> : null}
+      {provider.id === "openai" ? <OpenAIImageModels revision={modelsRevision} disabled={deletion.busy || Boolean(editing)} onChanged={setImageConnected} /> : provider.capabilities.includes("image") ? <ProviderImageModels key={`images-${modelsRevision}`} providerId={provider.id} /> : null}
+      {provider.id === "openai" && credentialType === "oauth" ? <p className="settings-detail-hint">ChatGPT browser sign-in provides coding models, not the OpenAI Images API. To generate images with your ChatGPT subscription, connect Codex · ChatGPT Images as a separate provider.</p> : null}
     </section>
   );
 }

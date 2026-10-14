@@ -13,6 +13,7 @@ import { SYSTEM_PROXY_TARGET } from "../shared/network-settings.js";
 import { createNetworkDispatcher } from "../daemon/proxy.js";
 import { electronProxyConfig, prepareDesktopNetwork, proxyCredentials } from "./network.js";
 import { loadEnvironmentFiles } from "../daemon/environment.js";
+import { ignoreBrokenStdio } from "./stdio.js";
 import { createDesktopWindow, fitPlaytestContentSize, isValidPlaytestViewport, waitForRenderer, windowChromeIsDark, windowsTitleBarOverlay, type WindowAppearance } from "./window.js";
 import { DesktopUpdatePreparationError, DesktopUpdater } from "./updater.js";
 import { ElectronPlaytestDriver } from "./playtest-driver.js";

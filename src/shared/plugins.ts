@@ -1,6 +1,7 @@
 import { Type, type Static } from "typebox";
 import { Check } from "typebox/value";
 import { PROJECT_TYPE_IDS, type PluginMention, type ProjectType } from "./contracts.js";
+import { PLUGIN_ICON_PRESETS, type PluginIconPresetId } from "./plugin-icons.js";
 
 export type PluginOrigin =
   | { type: "github"; repository: string; commit: string; release?: string }
@@ -103,6 +104,8 @@ export interface PluginSummary {
   name: string;
   displayName: string;
   description: string;
+  icon?: PluginIcon;
+  iconRevision?: string;
   version?: string;
   marketplace: PluginMarketplaceRef;
   source: PluginSource;
@@ -175,10 +178,27 @@ const SemVerSchema = Type.String({
   maxLength: 256,
 });
 
+export const PluginIconSchema = Type.Union([
+  Type.Object({
+    type: Type.Literal("preset"),
+    id: Type.Union(PLUGIN_ICON_PRESETS.map(icon => Type.Literal(icon.id))),
+  }, { additionalProperties: false }),
+  Type.Object({
+    type: Type.Literal("asset"),
+    path: Type.String({ pattern: "^\\./(?!\\.\\.(?:/|$))(?!.*\\/\\.\\.(?:/|$))[^\\\\]+\\.(?:png|webp)$", maxLength: 1000 }),
+  }, { additionalProperties: false }),
+]);
+export type PluginIcon = { type: "preset"; id: PluginIconPresetId } | { type: "asset"; path: string };
+
+export function isPluginIcon(value: unknown): value is PluginIcon {
+  return Check(PluginIconSchema, value);
+}
+
 const InterfaceSchema = Type.Object({
   displayName: Type.Optional(Type.String({ minLength: 1 })),
   shortDescription: Type.Optional(Type.String({ minLength: 1 })),
   longDescription: Type.Optional(Type.String({ minLength: 1 })),
+  icon: Type.Optional(Type.Unsafe<PluginIcon>(PluginIconSchema)),
   defaultPrompt: Type.Optional(Type.Array(Type.String({ minLength: 1 }), { minItems: 1 })),
   projectTypes: Type.Optional(Type.Array(Type.Union(PROJECT_TYPE_IDS.map((type) => Type.Literal(type))), { minItems: 1, uniqueItems: true })),
 }, { additionalProperties: false });
@@ -204,6 +224,7 @@ export interface CreateMcpPluginRequest {
   name: string;
   displayName?: string;
   description?: string;
+  icon?: PluginIcon;
   servers: Record<string, McpServerDefinition>;
   configuration?: Record<string, PluginConfigurationField>;
 }

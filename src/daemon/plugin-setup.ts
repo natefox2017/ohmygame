@@ -25,6 +25,7 @@ import type {
   PluginSetupState,
   PluginSetupSummary,
   PluginDraft,
+  PluginIconUpdate,
 } from "../shared/plugin-setup.js";
 import type {
   CreateMcpPluginRequest,
@@ -40,6 +41,9 @@ import { mcpPluginPackage } from "./plugin-capabilities.js";
 import { inspectPluginDraft, pluginDraftPath, readPluginDraftFile } from "./plugin-draft.js";
 import { PLUGIN_AUTHORING_RULES } from "./plugin-authoring.js";
 import { openRouterAttributionExtension } from "./openrouter-attribution.js";
+import { isPluginIcon, isPluginManifest, PLUGIN_MANIFEST_PATH } from "../shared/plugins.js";
+import { PLUGIN_ICON_MAX_BYTES } from "../shared/plugin-icons.js";
+import { readPluginIconAsset, validatePluginIconImage } from "./plugin-icons.js";
 
 const SETUP_PROMPT = `You help users create, configure and repair native OhMyGame plugins in a dedicated Plugin Builder workspace.
 ${PLUGIN_AUTHORING_RULES}
@@ -217,6 +221,59 @@ export class PluginSetupManager {
     if (!state.draftPath) throw new Error("No plugin draft yet");
     const root = await pluginDraftPath(path.join(this.#directory(id), "workspace"), state.draftPath);
     return readPluginDraftFile(root, requested);
+  }
+  async icon(id: string, requested?: string) {
+    const state = await this.#loadState(id);
+    if (!state.draftPath) return undefined;
+    const root = await pluginDraftPath(path.join(this.#directory(id), "workspace"), state.draftPath);
+    if (requested) return readPluginIconAsset(root, { type: "asset", path: requested });
+    const { content } = await readPluginDraftFile(root, PLUGIN_MANIFEST_PATH);
+    const manifest: unknown = JSON.parse(content);
+    return readPluginIconAsset(root, isPluginManifest(manifest) ? manifest.interface?.icon : undefined);
+  }
+  async updateIcon(id: string, input: PluginIconUpdate): Promise<PluginDraft> {
+    const state = await this.#loadState(id);
+    if (state.busy) throw new Error("Wait for the builder to finish before changing its icon");
+    state.busy = true;
+    try {
+      const draft = await this.draft(id);
+      if (!draft.plugin || draft.errors.length || !state.draftPath) throw new Error("Prepare a valid draft before changing its icon");
+      if (draft.revision !== input.revision) throw new Error("The draft changed. Refresh the preview before changing its icon");
+      const root = await pluginDraftPath(path.join(this.#directory(id), "workspace"), state.draftPath);
+      let icon = "icon" in input ? input.icon : undefined;
+      if ("image" in input) {
+        const { data, mediaType } = input.image;
+        if (!/^[A-Za-z0-9+/]+={0,2}$/.test(data) || data.length > Math.ceil(PLUGIN_ICON_MAX_BYTES / 3) * 4) throw new Error("Choose a PNG or WebP plugin icon up to 1 MB");
+        const bytes = Buffer.from(data, "base64");
+        if (bytes.toString("base64") !== data) throw new Error("Invalid plugin icon image");
+        const image = await validatePluginIconImage(bytes, mediaType);
+        const filename = `plugin-icon-${image.revision}.${image.mediaType === "image/png" ? "png" : "webp"}`;
+        const assets = path.join(root, "assets");
+        await mkdir(assets, { recursive: true });
+        const target = path.join(assets, filename);
+        await writeFile(target, bytes, { flag: "wx" }).catch(async (cause: NodeJS.ErrnoException) => {
+          if (cause.code !== "EEXIST") throw cause;
+          if (!(await readFile(target)).equals(bytes)) throw new Error("The plugin icon file already exists with different content");
+        });
+        icon = { type: "asset", path: `./assets/${filename}` };
+      }
+      if (icon && !isPluginIcon(icon)) throw new Error("Choose a supported preset ID or a PNG/WebP path inside the plugin");
+      await readPluginIconAsset(root, icon ?? undefined);
+      const file = path.join(root, PLUGIN_MANIFEST_PATH);
+      const manifest = JSON.parse(await readFile(file, "utf8"));
+      if (!isPluginManifest(manifest)) throw new Error("Plugin manifest is invalid");
+      manifest.interface = { ...manifest.interface };
+      if (icon) manifest.interface.icon = icon; else delete manifest.interface.icon;
+      const temporary = `${file}.${randomUUID()}.tmp`;
+      try {
+        await writeFile(temporary, `${JSON.stringify(manifest, null, 2)}\n`, { flag: "wx" });
+        await rename(temporary, file);
+      } finally { await rm(temporary, { force: true }); }
+      state.checks = {};
+      state.status = "ready";
+      state.updatedAt = Date.now();
+      return await this.draft(id);
+    } finally { state.busy = false; await this.#save(state); }
   }
   async configuration(id: string, values?: PluginConfigurationValues) {
     const draft = await this.draft(id);
@@ -612,6 +669,34 @@ export function registerPluginSetupRoutes(
   app.get<{ Params: { id: string } }>("/plugins/setup-sessions/:id/draft", async (request, reply) => {
     try { return await manager.draft(request.params.id); }
     catch (cause) { return reply.code(400).send({ error: String(cause) }); }
+  });
+  app.get<{ Params: { id: string }; Querystring: { path?: string } }>("/plugins/setup-sessions/:id/icon", {
+    schema: { querystring: { type: "object", additionalProperties: false, properties: { path: { type: "string", minLength: 1, maxLength: 1000 } } } },
+  }, async (request, reply) => {
+    try {
+      const image = await manager.icon(request.params.id, request.query.path);
+      if (!image) return reply.code(404).send({ error: "Plugin icon not found" });
+      return reply.header("Cache-Control", "no-store").header("X-Content-Type-Options", "nosniff").type(image.mediaType).send(image.bytes);
+    } catch { return reply.code(404).send({ error: "Plugin icon not found" }); }
+  });
+  app.put<{ Params: { id: string }; Body: PluginIconUpdate }>("/plugins/setup-sessions/:id/icon", {
+    bodyLimit: Math.ceil(PLUGIN_ICON_MAX_BYTES / 3) * 4 + 2048,
+    schema: { body: {
+      type: "object", required: ["revision"], additionalProperties: false,
+      oneOf: [{ required: ["icon"] }, { required: ["image"] }],
+      properties: {
+        revision: { type: "string", pattern: "^[0-9a-f]{64}$" },
+        icon: { anyOf: [{ type: "null" }, { type: "object", required: ["type"], additionalProperties: false, properties: {
+          type: { enum: ["preset", "asset"] }, id: { type: "string", maxLength: 100 }, path: { type: "string", maxLength: 1000 },
+        } }] },
+        image: { type: "object", required: ["mediaType", "data"], additionalProperties: false, properties: {
+          mediaType: { enum: ["image/png", "image/webp"] }, data: { type: "string", minLength: 1, maxLength: Math.ceil(PLUGIN_ICON_MAX_BYTES / 3) * 4 },
+        } },
+      },
+    } },
+  }, async (request, reply) => {
+    try { return await manager.updateIcon(request.params.id, request.body); }
+    catch (cause) { return reply.code(409).send({ error: cause instanceof Error ? cause.message : String(cause) }); }
   });
   app.delete<{ Params: { id: string } }>("/plugins/setup-sessions/:id", async (request, reply) => {
     try {

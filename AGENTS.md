@@ -1,3 +1,9 @@
+# Repository instructions
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) for setup, verification, formatting, and
+the contribution workflow. [docs/README.md](docs/README.md) maps modules to
+their code, documentation, and tests.
+
 ## Git
 
 - Prefer small PRs focused on one feature, one bug fix, one chore, or one refactor.

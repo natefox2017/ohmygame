@@ -333,9 +333,9 @@ export class ProjectManager {
     return this.#covers.set(this.#projectDirectory(id), contents, source);
   }
 
-  async restoreAutomaticCover(id: string): Promise<void> {
+  async setCoverMode(id: string, mode: ProjectCoverMode, fallback?: Uint8Array): Promise<void> {
     if (!this.#projects.has(id)) throw new Error(`Project not found: ${id}`);
-    await this.#covers.restoreAutomatic(this.#projectDirectory(id));
+    await this.#covers.setMode(this.#projectDirectory(id), mode, fallback);
   }
 
   async addGeneratedAsset(

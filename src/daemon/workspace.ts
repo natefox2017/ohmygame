@@ -1,4 +1,3 @@
-import { isUtf8 } from "node:buffer";
 import { open, readdir, realpath, stat } from "node:fs/promises";
 import path from "node:path";
 import type { WorkspaceFile, WorkspaceFileContent } from "../shared/contracts.js";
@@ -53,7 +52,7 @@ export async function readWorkspaceFile(workspacePath: string, requestedPath: st
 
   const handle = await open(absolutePath, "r");
   try {
-    const length = Math.min(fileStat.size, MAX_FILE_BYTES + 1);
+    const length = Math.min(fileStat.size, MAX_FILE_BYTES);
     const bytes = Buffer.alloc(length);
     const { bytesRead } = await handle.read(bytes, 0, length, 0);
     const content = bytes.subarray(0, bytesRead);
@@ -64,7 +63,7 @@ export async function readWorkspaceFile(workspacePath: string, requestedPath: st
       path: relativePath,
       size: fileStat.size,
       binary,
-      ...(!binary ? { content: visible.toString("utf8") } : {}),
+      ...(!binary ? { content: text } : {}),
       ...(truncated ? { truncated: true } : {}),
     };
   } finally {

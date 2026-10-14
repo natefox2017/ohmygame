@@ -1,7 +1,7 @@
 :root {
   color: #f1f3f5;
   background: var(--canvas);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   --canvas: #171717;
@@ -10,6 +10,8 @@
   --surface-hover: #303030;
   --border: #303030;
   --border-strong: #3a3a3a;
+  --scrollbar-thumb: rgb(255 255 255 / 8%);
+  --scrollbar-thumb-hover: rgb(255 255 255 / 14%);
   --search-border: rgb(255 255 255 / 8%);
   --text: #f1f3f5;
   --text-secondary: #969aa3;
@@ -45,12 +47,14 @@
 :root[data-appearance="light"] {
   color: #202020;
   color-scheme: light;
-  --canvas: #f7f7f7;
+  --canvas: #ffffff;
   --surface: #ffffff;
   --surface-raised: #ffffff;
   --surface-hover: #f4f4f4;
   --border: #e1e1e1;
   --border-strong: #c9c9c9;
+  --scrollbar-thumb: rgb(0 0 0 / 10%);
+  --scrollbar-thumb-hover: rgb(0 0 0 / 16%);
   --search-border: rgb(0 0 0 / 7%);
   --text: #202020;
   --text-secondary: #626262;
@@ -118,6 +122,28 @@
 
 * {
   box-sizing: border-box;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background: var(--scrollbar-thumb);
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background-color: var(--scrollbar-thumb-hover);
 }
 
 html,
@@ -146,7 +172,7 @@ body {
 }
 
 :root[data-appearance="light"] .desktop-window-frame {
-  --window-chrome-background: #f7f7f7;
+  --window-chrome-background: #ffffff;
   --window-chrome-text: #202020;
   --window-chrome-hover: rgb(0 0 0 / 7%);
 }
@@ -161,7 +187,7 @@ body {
   padding: 0 138px 0 8px;
   background: var(--window-chrome-background);
   color: var(--window-chrome-text);
-  font-family: "Segoe UI Variable Text", "Segoe UI", sans-serif;
+  font-family: "Segoe UI Variable Text", "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   font-size: 13px;
   app-region: drag;
   user-select: none;
@@ -254,7 +280,7 @@ body {
   border-right: 1px solid rgb(255 255 255 / 6%);
   background: var(--home-sidebar);
   color: #fff;
-  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -673,7 +699,7 @@ body {
   min-height: 0;
   overflow: auto;
   padding: 0 40px 48px;
-  scrollbar-color: var(--border) transparent;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
   scrollbar-width: thin;
 }
 
@@ -1822,7 +1848,7 @@ select.settings-search-input {
   max-height: 420px;
   overflow-y: auto;
   scrollbar-width: thin;
-  scrollbar-color: var(--border) transparent;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
   border-block: 1px solid var(--border);
 }
 
@@ -2543,7 +2569,7 @@ button.home-nav-item-active:hover {
   min-height: 0;
   overflow: auto;
   padding: 161px 32px 44px;
-  scrollbar-color: var(--border) transparent;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
   scrollbar-width: thin;
 }
 
@@ -2587,7 +2613,7 @@ button.home-nav-item-active:hover {
   min-height: 0;
   overflow: auto;
   padding: 0 36px 48px;
-  scrollbar-color: var(--border) transparent;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
   scrollbar-width: thin;
 }
 
@@ -4417,7 +4443,7 @@ button.home-nav-item-active:hover {
   padding: 6px 20px 20px;
   overflow-y: auto;
   scrollbar-width: thin;
-  scrollbar-color: var(--border) transparent;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 .connection-dialog .project-settings-field-row {
   grid-template-columns: minmax(0, 1fr) 150px;
@@ -4512,7 +4538,7 @@ button.home-nav-item-active:hover {
   font-size: 11px;
   font-weight: 500;
 }
-.publish-dialog input:not([type="file"]),
+.publish-dialog input:not([type="file"], [type="checkbox"]),
 .publish-dialog textarea {
   width: 100%;
   padding: 0 10px;
@@ -4524,7 +4550,7 @@ button.home-nav-item-active:hover {
   font: inherit;
   font-size: 12px;
 }
-.publish-dialog input:not([type="file"]) {
+.publish-dialog input:not([type="file"], [type="checkbox"]) {
   height: 38px;
 }
 .publish-dialog textarea {
@@ -4588,10 +4614,36 @@ button.home-nav-item-active:hover {
   justify-content: space-between;
   gap: 7px;
 }
-.publish-cover-heading > span {
+.publish-cover-label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 500;
+}
+.publish-cover-label > span {
   color: var(--text-faint);
   font-size: 10px;
   font-weight: 400;
+}
+.publish-dialog .publish-cover-automatic {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  cursor: pointer;
+  font-size: 10px;
+}
+.publish-cover-automatic:has(:disabled) {
+  cursor: default;
+  opacity: 0.45;
+}
+.publish-cover-automatic .settings-toggle {
+  cursor: inherit;
+}
+.publish-cover-automatic input:focus-visible + span {
+  outline: 2px solid var(--composer-accent);
+  outline-offset: 3px;
 }
 .publish-cover-controls {
   justify-content: flex-end;
@@ -5862,6 +5914,11 @@ button.home-nav-item-active:hover {
   border-radius: 9px;
   background: var(--surface-hover);
   color: var(--text-secondary);
+}
+.plugin-icon-image {
+  object-fit: contain;
+  max-width: 100%;
+  max-height: 100%;
 }
 
 .plugin-row-copy {
@@ -7315,7 +7372,7 @@ button {
 /* Keep preview anchors stable even when React Flow's styles load after ours. */
 .story-node > .story-media-input-handle,
 .story-node > .story-media-output-handle {
-  top: calc(28px + var(--story-media-height, 280px) / 2);
+  top: calc(var(--story-card-title-height, 28px) + var(--story-media-height, 280px) / 2);
 }
 
 .story-node-outputs {
@@ -7329,8 +7386,8 @@ button {
 }
 
 .story-presentation-node-card > .story-node-outputs {
-  top: 28px;
-  bottom: 28px;
+  top: var(--story-card-title-height, 28px);
+  bottom: var(--story-card-title-height, 28px);
 }
 
 .story-node-output {
@@ -7488,7 +7545,7 @@ button {
 
 .story-media-node-label {
   display: flex;
-  height: 28px;
+  height: var(--story-card-title-height, 28px);
   align-items: center;
   gap: 6px;
   color: var(--text-secondary);
@@ -9152,7 +9209,7 @@ button {
   min-height: 0;
   overflow-x: hidden;
   overflow-y: auto;
-  scrollbar-color: var(--border) transparent;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
   scrollbar-gutter: stable;
   scrollbar-width: thin;
 }
@@ -9183,7 +9240,7 @@ button {
   flex-direction: column;
   overflow: auto;
   padding: 0 6px 6px;
-  scrollbar-color: var(--border) transparent;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
   scrollbar-width: thin;
 }
 
@@ -11166,7 +11223,7 @@ button {
   border: 1px solid var(--menu-border);
   border-radius: 16px;
   background: var(--menu-surface);
-  scrollbar-color: var(--border) transparent;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
   scrollbar-width: thin;
 }
 
@@ -11674,12 +11731,14 @@ button {
   min-width: 0;
   height: 30px;
   align-items: center;
+  gap: 4px;
   border-radius: var(--radius);
   color: var(--text-muted);
 }
 
 .model-selector-canvas {
   height: 28px;
+  gap: 6px;
 }
 
 .model-selector-trigger {
@@ -11744,6 +11803,15 @@ button {
   opacity: 0.5;
 }
 
+.model-selector-trigger:focus-visible {
+  outline: 2px solid var(--focus-ring);
+  outline-offset: 1px;
+}
+
+.model-selector-reasoning-trigger {
+  flex: 0 0 auto;
+}
+
 .model-selector-popover {
   position: fixed;
   z-index: 200;
@@ -11755,8 +11823,12 @@ button {
   width: 220px;
 }
 
+.model-selector-popover-reasoning {
+  width: 150px;
+}
+
 .model-selector-menu,
-.model-selector-submenu {
+.model-selector-reasoning-menu {
   display: flex;
   box-sizing: border-box;
   width: 100%;
@@ -11766,14 +11838,13 @@ button {
   background: var(--menu-surface);
 }
 
-.model-selector-submenu {
-  position: relative;
+.model-selector-reasoning-menu {
   gap: 2px;
-  max-height: min(220px, calc(100dvh - 32px));
+  max-height: min(280px, calc(100dvh - 32px));
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
-  scrollbar-color: var(--border) transparent;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
   scrollbar-width: thin;
 }
 
@@ -11829,7 +11900,7 @@ button {
   flex-direction: column;
   overflow-y: auto;
   overscroll-behavior: contain;
-  scrollbar-color: var(--border) transparent;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
   scrollbar-width: thin;
 }
 
@@ -11845,7 +11916,8 @@ button {
   border-top: 0;
 }
 
-.model-selector-provider-name {
+.model-selector-provider-name,
+.model-selector-menu-heading {
   padding: 3px 7px 2px;
   overflow: hidden;
   color: var(--text-muted);
@@ -11857,15 +11929,15 @@ button {
 }
 
 .model-selector-model-list::-webkit-scrollbar,
-.model-selector-submenu::-webkit-scrollbar {
+.model-selector-reasoning-menu::-webkit-scrollbar {
   width: 8px;
 }
 
 .model-selector-model-list::-webkit-scrollbar-thumb,
-.model-selector-submenu::-webkit-scrollbar-thumb {
+.model-selector-reasoning-menu::-webkit-scrollbar-thumb {
   border: 2px solid transparent;
   border-radius: 999px;
-  background: var(--border-strong);
+  background: var(--scrollbar-thumb);
   background-clip: padding-box;
 }
 
@@ -11884,7 +11956,7 @@ button {
 }
 
 .model-selector-menu button,
-.model-selector-submenu button {
+.model-selector-reasoning-menu button {
   display: flex;
   width: 100%;
   height: 30px;
@@ -11905,23 +11977,8 @@ button {
   text-align: left;
 }
 
-.model-selector-submenu .model-selector-back {
-  justify-content: flex-start;
-  gap: 7px;
-  margin-bottom: 2px;
-  border-bottom: 0;
-  border-radius: 0;
-  color: var(--text);
-}
-
-.model-selector-submenu button {
+.model-selector-reasoning-menu button {
   color: var(--text-muted);
-}
-
-.model-selector-menu .model-selector-reasoning {
-  margin-top: 2px;
-  border-top: 0;
-  border-radius: 0 0 4px 4px;
 }
 
 .model-selector-menu .model-selector-manage {
@@ -11936,31 +11993,22 @@ button {
 .model-selector-menu button:hover,
 .model-selector-menu button:focus-visible,
 .model-selector-menu button.active,
-.model-selector-submenu button:hover,
-.model-selector-submenu button:focus-visible,
-.model-selector-submenu button.active {
+.model-selector-reasoning-menu button:hover,
+.model-selector-reasoning-menu button:focus-visible,
+.model-selector-reasoning-menu button.active {
   outline: 0;
   background: var(--menu-hover);
   color: var(--text);
 }
 
 .model-selector-menu button > span:first-child,
-.model-selector-submenu button > span:first-child {
+.model-selector-reasoning-menu button > span:first-child {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.model-selector-setting-value {
-  display: flex;
-  min-width: 0;
-  align-items: center;
-  gap: 5px;
-  color: #b1b3bc;
-}
-
-.model-selector-setting-value svg,
-.model-selector-submenu button > svg {
+.model-selector-reasoning-menu button > svg {
   flex: 0 0 auto;
 }
 
@@ -12039,7 +12087,7 @@ button {
   max-width: 100%;
   align-items: center;
   gap: 6px;
-  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
 }
 
 .viewport-menu {
@@ -12793,7 +12841,7 @@ button {
   display: grid;
   min-width: 0;
   gap: 2px;
-  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
 }
 .electron-game-toolbar strong,
 .electron-game-toolbar span {
@@ -13441,7 +13489,7 @@ button {
   margin: 4px 6px 3px;
   overflow-wrap: anywhere;
   color: var(--danger);
-  font-family: Inter, system-ui, sans-serif;
+  font-family: Inter, system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
   font-size: 9px;
   line-height: 1.35;
   white-space: normal;
@@ -14445,30 +14493,6 @@ button {
   color: #363636;
 }
 
-:root[data-appearance="light"] * {
-  scrollbar-color: #c2c5c2 transparent;
-}
-
-:root[data-appearance="light"] *::-webkit-scrollbar {
-  width: 10px;
-  height: 10px;
-}
-
-:root[data-appearance="light"] *::-webkit-scrollbar-track {
-  background: transparent;
-}
-
-:root[data-appearance="light"] *::-webkit-scrollbar-thumb {
-  border: 3px solid transparent;
-  border-radius: 999px;
-  background: #c2c5c2;
-  background-clip: padding-box;
-}
-
-:root[data-appearance="light"] *::-webkit-scrollbar-thumb:hover {
-  background-color: #aeb2ae;
-}
-
 :root[data-appearance="light"] .markdown-code-block {
   background: #f7f7f7;
 }
@@ -14493,7 +14517,7 @@ button {
 :root[data-appearance="light"]
   :is(
     .prompt-box-home .model-selector-trigger,
-    .model-selector-setting-value,
+    .prompt-box-project .model-selector-trigger,
     .quiet-button,
     .viewport-trigger,
     .preview-location-refresh,
@@ -14536,7 +14560,7 @@ button {
   .selected-text-menu,
   .composer-command-menu,
   .model-selector-menu,
-  .model-selector-submenu,
+  .model-selector-reasoning-menu,
   .viewport-menu-popover,
   .preview-location-popover,
   .sign-in-dialog,
@@ -14555,7 +14579,7 @@ button {
   .project-switcher-popover,
   .conversation-popover,
   .model-selector-menu,
-  .model-selector-submenu,
+  .model-selector-reasoning-menu,
   .sign-in-dialog,
   .project-create-dialog,
   .project-settings-dialog,
@@ -15095,50 +15119,62 @@ button {
   color: var(--text-faint);
 }
 
-/* Over the Playtest game: Replay on hover, and a note when something breaks. Always dark. */
-.playable-playtest-corner button,
+/* Playtest actions stay in the editor, outside the game's input surface. */
+.playable-playtest-controls {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  app-region: no-drag;
+}
+.playable-playtest-controls > .playable-playtest-menu-trigger {
+  width: 18px;
+}
+.playable-playtest-menu {
+  position: absolute;
+  z-index: 20;
+  top: calc(100% + 8px);
+  right: 0;
+  display: flex;
+  min-width: 200px;
+  flex-direction: column;
+  padding: 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--menu-surface);
+  box-shadow: var(--menu-shadow);
+}
+.playable-playtest-menu > button {
+  display: flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.playable-playtest-menu > button:is(:hover, :focus-visible) {
+  background: var(--menu-hover);
+}
+
+/* Over the Playtest game: a note only when something breaks. Always dark. */
 .playable-playtest-problem {
   position: fixed;
   z-index: 10;
   border: 1px solid rgb(255 255 255 / 12%);
   background: rgb(12 13 16 / 88%);
   color: #eceef2;
-  font-family: Inter, system-ui, sans-serif;
+  font-family: Inter, system-ui, "PingFang SC", "Microsoft YaHei", sans-serif;
   font-size: 11px;
   backdrop-filter: blur(12px);
   app-region: no-drag;
-}
-.playable-playtest-corner {
-  position: fixed;
-  z-index: 10;
-  top: 12px;
-  right: 12px;
-  display: flex;
-  gap: 6px;
-  opacity: 0;
-  transition: opacity 120ms ease;
-  app-region: no-drag;
-}
-/* Shown only while the pointer is near the top corner; the ::before widens that area. */
-.playable-playtest-corner:is(:hover, :focus-within) {
-  opacity: 1;
-}
-.playable-playtest-corner::before {
-  position: absolute;
-  inset: -24px -12px -24px -60px;
-  content: "";
-}
-.playable-playtest-corner button {
-  position: relative;
-  display: grid;
-  width: 30px;
-  height: 30px;
-  place-items: center;
-  padding: 0;
-  border-radius: 8px;
-  cursor: pointer;
-}
-.playable-playtest-problem {
   bottom: 16px;
   left: 50%;
   display: flex;
@@ -15190,7 +15226,7 @@ button {
 .custom-provider-dialog { display: flex; width: min(580px, 100%); flex-direction: column; overflow: hidden; }
 .custom-provider-dialog > header { flex-shrink: 0; }
 .custom-provider-dialog > form { display: flex; min-height: 0; flex-direction: column; gap: 0; padding: 0; }
-.custom-provider-dialog-body { display: grid; min-height: 0; gap: 18px; padding: 6px 20px 20px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+.custom-provider-dialog-body { display: grid; min-height: 0; gap: 18px; padding: 6px 20px 20px; overflow-y: auto; scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) transparent; }
 .custom-provider-dialog footer { flex-shrink: 0; padding: 12px 20px 16px; border-top: 1px solid var(--border); }
 .custom-provider-hint { margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.6; }
 .custom-provider-dialog label > small, .custom-provider-dialog label > span > small { color: var(--text-faint); font-size: 10px; font-weight: 400; line-height: 1.4; }
@@ -15236,7 +15272,7 @@ button {
 .custom-provider-model-picker > .custom-provider-hint { overflow-wrap: anywhere; }
 .custom-provider-model-picker .custom-provider-model-search { display: flex; min-width: 0; align-items: center; gap: 8px; padding-left: 10px; border-radius: var(--radius); background: var(--control-surface); }
 .custom-provider-model-search input { min-width: 0; flex: 1; background: transparent; padding-left: 0; font-family: inherit; }
-.custom-provider-model-results { max-height: 240px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius); scrollbar-width: thin; scrollbar-color: var(--border) transparent; }
+.custom-provider-model-results { max-height: 240px; overflow-y: auto; border: 1px solid var(--border); border-radius: var(--radius); scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) transparent; }
 .custom-provider-model-results.is-editing { max-height: none; overflow: visible; }
 .custom-provider-model-picker :is(.custom-provider-model-choice, .custom-provider-select-all) { display: flex; align-items: center; gap: 10px; cursor: pointer; }
 .custom-provider-model-choice { min-height: 48px; padding: 9px 10px; }

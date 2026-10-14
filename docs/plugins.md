@@ -27,12 +27,52 @@ A package contains `.ohmygame-plugin/plugin.json`:
   },
   "interface": {
     "displayName": "My Service",
+    "icon": { "type": "preset", "id": "plug" },
     "projectTypes": ["web-game", "godot-game"]
   }
 }
 ```
 
 All paths are relative to the plugin root and start with `./`. Omit components the plugin does not use. Skills use `skills/<skill-name>/SKILL.md` with `name` and `description` frontmatter. Configuration fields support `text`, `secret`, `path`, `boolean`, and `select`. Select fields require string `options`. Nonsecret fields may provide a default of the appropriate type; secret defaults are rejected.
+
+### Plugin icons
+
+`interface.icon` is optional display metadata. Use a Solar preset with
+`{"type":"preset","id":"image"}`, or a package-owned image with
+`{"type":"asset","path":"./assets/icon.png"}`. Supported preset IDs are
+`package`, `gamepad`, `globe`, `box`, `image`, `palette`, `brush`, `music`,
+`video`, `film`, `code`, `terminal`, `plug`, `server`, `wand`, `sparkles`,
+`document`, `folder`, `layers`, `lightbulb`, `search`, `wrench`, `clipboard`,
+and `flag`. The shared catalog in `src/shared/plugin-icons.ts` supplies the
+picker, validation, and AI authoring instructions.
+
+Custom icons must be valid PNG or WebP files up to 1 MB and 2048 × 2048 pixels.
+Paths start with `./`, stay inside the plugin root, and cannot use symbolic
+links. Remote URLs, absolute paths, SVG, and unknown preset IDs are rejected.
+A square image with a transparent background is recommended. Installed images
+are copied with the package and served by the daemon using authenticated
+requests in the desktop app. Missing or failed image requests show the default
+package glyph. Packages without an icon retain the existing built-in/default
+appearance.
+
+Missing, oversized or undecodable icon images in an imported or installed
+package do not prevent the plugin from installing or loading; their icon
+metadata is omitted so the default glyph appears. Builder preparation and icon
+saves still reject invalid assets.
+Installed image responses use content-based ETags for private revalidation.
+Successful image decoding is reused by content hash; each read still checks the
+current file and its path.
+
+In Plugin Builder's Overview, click the icon beside the plugin name to search
+presets, enter a preset ID, upload an image, choose a package image path, or
+restore the default. This editor is available after a valid draft has been
+prepared, including for an installed plugin with its original builder draft.
+Changes save to the draft; use Install plugin or Update plugin to apply them.
+Uploads use content-addressed filenames under `assets/` and preserve existing
+package files. Icon edits refresh the content revision and clear saved checks;
+stale icon saves and installations are rejected. Image path previews only read
+valid PNG/WebP files from that draft. AI chooses from the same preset catalog
+and preserves an existing user-selected icon.
 
 `mcp.json` declares existing STDIO or HTTP MCP servers:
 

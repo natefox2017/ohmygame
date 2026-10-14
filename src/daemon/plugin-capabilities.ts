@@ -429,7 +429,7 @@ export function mcpPluginPackage(input: CreateMcpPluginRequest, allowSecrets = f
     description: input.description || "MCP tools",
     mcpServers: "./mcp.json",
     configuration: fields,
-    interface: { displayName: input.displayName || input.name },
+    interface: { displayName: input.displayName || input.name, icon: input.icon ?? { type: "preset", id: "plug" } },
   };
   if (!isPluginManifest(manifest)) throw new LocalPluginError("Invalid plugin name or configuration fields");
   return { manifest, servers, values };

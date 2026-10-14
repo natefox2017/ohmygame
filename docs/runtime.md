@@ -30,6 +30,14 @@ daemon itself on an available loopback port, waits for `/health`, and passes
 the daemon address plus a random process-scoped token through the isolated
 preload bridge. The renderer has no Node.js access.
 
+The main desktop window starts at 1200 × 780 logical pixels, centered on the
+display containing the pointer. It fits within 90% of that display's available
+width and 88% of its available height, excluding system panels and the Dock.
+Its usual minimum is 960 × 640; smaller displays lower the minimum to fit the
+initial window. First-run setup shares this window with the home screen, so
+finishing setup does not resize it. Playtest and capture windows keep their
+explicit content dimensions.
+
 Bun 1.4.2 installs dependencies and executes builds, tests, and most preparation
 scripts. Pinned Plugin archives are prepared with Node and store their entries
 uncompressed, so their locked ZIP checksums do not depend on the zlib build;
@@ -66,11 +74,6 @@ loads `.env.local` while preserving values supplied by the parent process.
 authenticated API with Node. `PI_CODING_AGENT_DIR` can isolate the desktop
 agent's configuration during verification.
 
-The full Bun daemon experiment remains on `chore/bun-runtime`; the adopted
-toolchain stage is on `chore/bun-toolchain`. See the
-[adoption report](experiments/bun-toolchain-2026-10-07.md) for validation and
-measured tradeoffs, including corrections to the earlier experiment's baseline.
-
 Electron main owns only desktop lifecycle. Projects, conversations, previews,
 and events live in the daemon. Closing the last window quits the application
 and gives the daemon time to stop active Pi and preview processes.
@@ -85,6 +88,51 @@ See [preview isolation and service recovery](runtime-recovery.md) for behavior,
 recovery limits, and validation scenarios.
 See [preview configuration and lifecycle](preview-runtime.md) for startup modes,
 automatic policy, idle collection, logs, and browser storage.
+
+## First-run setup
+
+The home route reads the daemon's `/settings/onboarding` preference before
+opening the studio. The daemon stores version 1 state in `onboarding.json`
+under its data directory: `status` is `pending`, `completed`, or `skipped`,
+and `step` is `welcome` or `connect`. Atomic, serialized writes retain the
+current step across restarts. Completing setup requires a language model in
+the same enabled, visible catalog used by the home composer. This checks
+configuration and catalog availability, without sending an inference request.
+The provider screen enables **Start creating** only when a language model is
+available; it records `completed`. The separate **Skip and start** action
+is a text button without a hover background. It records `skipped` and allows
+configuration later in Settings. **Next** and the provider screen's actions
+sit near the bottom, above the step indicators. Saved built-in
+and custom connections show **Connected** instead of offering setup again.
+Disabled connections offer **Enable** without changing credentials. Before
+starting or retrying setup, the renderer refreshes the provider's saved state to avoid
+reopening a connection that changed since the list loaded. Existing provider
+credentials and models can be edited from Settings.
+
+An installation with no preference but existing projects or a configured
+language provider is marked completed once. Media credentials alone do not
+count as language setup. A saved completion or skip remains valid if providers
+are later removed. Damaged preferences are logged and reinitialized rather
+than blocking project access. Project links, playtest windows, and thumbnail
+renderers do not pass through the home gate.
+
+**Settings → About → View getting started** reopens the welcome. Moving to the
+connection step with **Next** saves a pending preference again. The two bottom
+step indicators are buttons for switching between the welcome and provider
+screens. Selecting the provider step also returns from its inline forms to
+the provider list. Step navigation is disabled while saving. The welcome's
+illustration plays once per visit in 5.2 seconds. Only the forming game world
+is visible at first: terrain rises, paths unfold, water reshapes, and trees
+grow in sequence. Its outline then morphs into a small OhMyGame logo beside
+the wordmark, followed by **Your own game studio.** and **Next**. Hidden
+controls stay out of keyboard navigation. Reduced-motion preferences show the
+final logo, title, and controls immediately. The connection screen reuses
+the daemon's provider authentication flow and custom-provider form; it does
+not require an OhMyGame cloud account. The add button beside provider search
+opens that form inline. Settings uses the same form in its existing dialog.
+Saving or cancelling returns to the provider list without adding a persisted
+setup step. Image, video, and 3D connections and default models are configured
+in Settings and do not change the language-only completion requirement.
 
 ## Network proxy
 
@@ -182,21 +230,22 @@ Web publishing is independent of the switch: it validates a static `index.html`
 or the configured build's static output. Native engines use their own tools or
 Connections; General Game does not install an engine or initialize a Web wrapper.
 
-Web Game's **Play** button opens one human-controlled game window per project.
-Repeated clicks focus the existing game without reloading it. While that window
-is opening or running, the editor unloads its Preview iframe and shows the last
-project cover with a **Return to game** action. Closing the player restores the
-iframe when the Preview tab is visible; other tabs do not start another game.
-Opening or returning to the player reloads neither a ready development server
-nor an in-flight server startup. Browser-only development uses a named popup.
+The desktop **Play** button opens one human-controlled game window per project.
+Repeated clicks focus it without reloading. Preview and Play move the same
+WebContentsView between the editor and the native player window, preserving the
+document, route, in-memory state, localStorage, and IndexedDB. Closing Play
+returns the view to Preview. The editor shows the last project cover with a
+**Return to game** action while the player is open. Opening or returning to the
+player does not restart a ready or in-flight development server.
 
-The human window uses the Preview's browser storage and receives no editor
-preload or daemon credentials. Moving between the iframe and player reloads
-the game, so in-memory progress is not transferred; saved progress depends on
-the game's storage. Reload targets the active human game. A restarted server
-reloads an open player at its current route. The preview origin is retained across
-restarts when its saved port is available. Human play and agent tests share the
-development server and source, so code changes can still hot-update both.
+The game view receives no editor preload or daemon credentials. Browser-only
+development uses a Preview iframe and a separate named popup; switching between
+them reloads the game, and saved progress depends on the game's storage. Reload
+targets the active human game. A restarted server reloads it at the current
+route. The preview origin is retained across restarts when its saved port is
+available. Human play and agent tests share the development server and source,
+so code changes can hot-update both. See [preview lifecycle](preview-runtime.md)
+for storage, diagnostics, and window details.
 
 The desktop runtime exposes game interaction and verification as the Pi custom
 tool `game_use`. This is an OhMyGame core capability rather than a Plugin:
@@ -296,8 +345,10 @@ Each project lives under the daemon data directory:
 ```text
 projects/<project-id>/
 ├── project.json   project identity and latest publication
-├── cover.webp     custom cover; its presence stops automatic replacement
+├── cover.webp     uploaded cover, retained while automatic mode is enabled
 ├── cover-auto.webp last automatic cover, retained when a custom cover is applied
+├── cover-frozen.webp frozen automatic cover or Interactive Story thumbnail
+├── cover-state.json explicit cover mode, including when no cover exists
 ├── preview-origin.json stable local preview port
 ├── workspace/     the project files (or an existing folder in the desktop app)
 └── session/       Pi session files, one per conversation
@@ -307,12 +358,20 @@ Removing a project never deletes an existing folder used as its workspace.
 
 Project covers are saved independently of publishing. Selecting an image in the
 publish dialog previews it; **Apply cover** saves it and stops automatic cover
-replacement. **Restore automatic cover** returns to the last automatic cover,
-or an Interactive Story's Scene thumbnail when available. Automatic captures
+replacement. The **Automatic** switch beside **Cover** can also stop replacement
+without uploading an image: it freezes the current cover, including an
+Interactive Story's Scene thumbnail, or keeps the cover empty if none exists.
+Turning it back on returns to the last automatic cover, or an Interactive
+Story's Scene thumbnail when available. Uploaded covers are retained: turning
+**Automatic** off again restores the uploaded image. Without an uploaded image,
+turning it off freezes the current automatic cover. Automatic captures
 cannot overwrite a custom cover, including captures already in flight. Existing
 covers from older app versions are protected as custom covers until the user
-restores automatic mode. Restoring removes the custom cover; the automatic
-cover is retained separately. Duplicating a project preserves both covers.
+enables **Automatic**. Enabling it removes only the frozen snapshot and saves
+automatic mode; uploaded and automatic covers are retained separately.
+Unreadable JSON or invalid mode values fall back to custom mode when an uploaded
+cover exists, or automatic mode otherwise. The preference survives restarts.
+Duplicating a project preserves the covers and the selected mode.
 The Community cover is a snapshot in the published Deployment and changes only
 when an update is published; publication details show that snapshot.
 

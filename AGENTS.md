@@ -36,6 +36,7 @@ their code, documentation, and tests.
 
 ## Development and verification
 
+- With upstream i18n, keep `README.md` and `README.zh-CN.md` consistent for changed public behavior, and add any new UI strings to both `src/renderer/locales/en.ts` and `zh-CN.ts` in the same change. Use English for Agent-directed prompts; refer to `docs/ui-languages.md`. This fork continues targeting its own `main` branch, not upstream's `dev` contribution process.
 - Follow existing implementation and test conventions. `CONTRIBUTING.md` requests `bun run test`, `bun run typecheck`, `bun run build` and `bun run test:node-runtime` before a PR. Add or update `test/` coverage for changed behavior; include a screenshot or recording for UI changes. Follow its existing formatting instructions.
 - Define a finite verification set from the approved acceptance criteria and all existing mandatory checks; do not grow it speculatively. Record the exact command/case, environment, tested commit SHA, and `PASS`, `FAIL` or `NOT RUN`. Green CI or tests from an earlier SHA are not proof of the change's acceptance.
 - Fix in-scope failures, preserve evidence of unrelated baseline failures, and state unavailable-environment blockers. Do not repeat unchanged failing checks indefinitely; allow at most one justified transient-infrastructure retry.

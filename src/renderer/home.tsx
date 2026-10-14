@@ -38,7 +38,7 @@ export function Home({ onNavigate, onCreate, onOpen }: HomeProps) {
   const [restoreTarget, setRestoreTarget] = useState<ProjectState>();
   const renameTrigger = useRef<HTMLElement | null>(null);
   const { examples, covers: exampleCovers } = useExamples();
-  const { sectionRef, columns, recentProjectLimit } = useProjectShelfLayout();
+  const { sectionRef, recentProjectLimit } = useProjectShelfLayout();
 
   async function loadProjects() {
     setPhase("loading");
@@ -80,7 +80,6 @@ export function Home({ onNavigate, onCreate, onOpen }: HomeProps) {
   }
 
   const visibleProjects = projects.slice(0, recentProjectLimit);
-  const visibleExamples = examples.slice(0, columns);
 
   return (
     <main className="home-shell">
@@ -141,9 +140,9 @@ export function Home({ onNavigate, onCreate, onOpen }: HomeProps) {
           ) : null}
           {projectActionError ? <p className="home-notice" role="alert">{projectActionError}</p> : null}
         </section>
-        {visibleExamples.length > 0 ? <section className="home-discover home-explore studio-examples" aria-labelledby="home-examples-heading">
+        {examples.length > 0 ? <section className="home-discover home-explore studio-examples" aria-labelledby="home-examples-heading">
           <div className="studio-section-heading"><h2 id="home-examples-heading">{t("home.explore")}</h2></div>
-          <ExampleShelf examples={visibleExamples} covers={exampleCovers} showType onOpenProject={onOpen} />
+          <ExampleShelf examples={examples} covers={exampleCovers} showType onOpenProject={onOpen} />
         </section> : null}
       </section>
       {restoreTarget ? <ProjectCheckpointDialog project={restoreTarget} onClose={() => setRestoreTarget(undefined)}

@@ -25,13 +25,17 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
-          persist-credentials: false
+          # GitHub Actions supplies a short-lived, job-scoped token here.
+          # The self-hosted grok-box runner does not have the gh CLI.
+          persist-credentials: true
 
       - name: Fetch upstream main
         id: fetch
         shell: bash
         run: |
           set -euo pipefail
+          # Self-hosted worktrees may retain remotes from earlier scheduled runs.
+          git remote remove upstream 2>/dev/null || true
           git remote add upstream https://github.com/WhiteTowerAI/ohmygame.git
           git fetch --no-tags upstream main
           echo "downstream_sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
@@ -90,11 +94,10 @@ jobs:
 
       - name: Push verified merge to downstream main
         if: steps.merge.outputs.updated == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh auth setup-git
+          # Checkout already installed the temporary job credential; do not
+          # depend on an uninstalled gh executable on self-hosted runners.
           # Non-force push: fail instead of overwriting someone else's new commits.
           git push origin HEAD:refs/heads/main
 

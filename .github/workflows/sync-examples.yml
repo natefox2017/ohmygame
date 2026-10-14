@@ -56,7 +56,9 @@ jobs:
         with:
           ref: main
           fetch-depth: 0
-          persist-credentials: false
+          # GitHub Actions supplies a short-lived, job-scoped token here.
+          # The self-hosted grok-box runner does not have the gh CLI.
+          persist-credentials: true
 
       - name: Read the upstream examples commit
         id: check
@@ -128,11 +130,10 @@ jobs:
 
       - name: Push only the tested pin; refuse concurrent main changes
         if: steps.check.outputs.updated == 'true'
-        env:
-          GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
           set -euo pipefail
+          # The checkout step already provided the short-lived job credential.
           git fetch origin main
           if [[ "$(git rev-parse origin/main)" != "$(git rev-parse HEAD)" ]]; then
             echo "::error::main moved while validating examples; retry on the next run instead of overwriting it."
@@ -143,7 +144,6 @@ jobs:
           git add -- config/examples.json
           git diff --cached --name-only | grep -Fxq "config/examples.json"
           git commit -m "chore(examples): sync verified upstream examples"
-          gh auth setup-git
           git push origin HEAD:refs/heads/main
 
       - name: Summarize sync

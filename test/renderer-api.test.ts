@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { approvePlan, cancelPlan, compactConversation, createConversation, createLibraryImage, createProject, deleteWorkspaceEntry, deleteLibraryAsset, deleteProject, duplicateProject, forceDeleteLibraryAsset, getConversation, getConversationCapabilities, getConversationContextUsage, getExploreGameCover, getHomeComposerCapabilities, getLibraryAsset, getOpenAIEndpointSettings, getNodeCodebase, getProjectCover, getWorkspaceAsset, getWorkspaceFile, inspectPluginSource, installPlugin, listLibraryAssetReferences, listLibraryAssets, listModels, listPlugins, listProjects, listWorkspaceFiles, publishProject, readPlugin, readPluginSkill, refinePlan, removePendingPrompt, renameWorkspaceEntry, renameConversation, renameLibraryAsset, renameProject, reviseLastPrompt, sendPrompt, setConversationModel, setConversationReasoning, setProjectCover, steerPendingPrompt, subscribeToProject, uninstallPlugin, updateAgentDefaults, updateOpenAIEndpointSettings, updateNodeCodebase, updatePluginSettings, updateProjectRunSettings, updateProjectStartupDirectory, uploadLibraryAsset } from "../src/renderer/api.js";
-import { cancelToolJob, getProjectCoverState, listToolJobs, restoreAutomaticProjectCover, retryToolJob, startToolJob } from "../src/renderer/api.js";
+import { readPluginIconImage, updatePluginDraftIcon, cancelToolJob, getProjectCoverState, listToolJobs, setProjectCoverMode, retryToolJob, startToolJob } from "../src/renderer/api.js";
 import type { RuntimeEvent } from "../src/shared/contracts.js";
 
 afterEach(() => {
@@ -641,6 +641,21 @@ describe("renderer project API", () => {
     );
   });
 
+  it("loads plugin icons through authenticated desktop requests and saves draft revisions", async () => {
+    vi.stubGlobal("window", {
+      ohMyGameDesktop: { runtime: { daemonUrl: "http://127.0.0.1:43210", token: "secret" } },
+    });
+    const fetchMock = vi.fn(async () => new Response("icon", { headers: { "content-type": "image/png" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    await expect(readPluginIconImage("personal:review")).resolves.toBeInstanceOf(Blob);
+    expect(fetchMock).toHaveBeenLastCalledWith("http://127.0.0.1:43210/plugins/personal%3Areview/icon", expect.objectContaining({ headers: { authorization: "Bearer secret" } }));
+    await readPluginIconImage("personal:review", "workspace", undefined, "./assets/logo.png");
+    expect(fetchMock).toHaveBeenLastCalledWith("http://127.0.0.1:43210/plugins/setup-sessions/workspace/icon?path=.%2Fassets%2Flogo.png", expect.objectContaining({ headers: { authorization: "Bearer secret" } }));
+    fetchMock.mockImplementation(async () => Response.json({ errors: [], revision: "next" }));
+    await updatePluginDraftIcon("workspace", { revision: "reviewed", icon: { type: "preset", id: "image" } });
+    expect(fetchMock).toHaveBeenLastCalledWith("http://127.0.0.1:43210/plugins/setup-sessions/workspace/icon", expect.objectContaining({ method: "PUT", body: JSON.stringify({ revision: "reviewed", icon: { type: "preset", id: "image" } }), headers: expect.objectContaining({ authorization: "Bearer secret" }) }));
+  });
+
   it("loads and stores project covers with desktop authorization", async () => {
     vi.stubGlobal("window", {
       ohMyGameDesktop: { runtime: { daemonUrl: "http://127.0.0.1:43210", token: "secret" } },
@@ -665,7 +680,7 @@ describe("renderer project API", () => {
     });
   });
 
-  it("marks automatic cover writes and restores automatic mode without publishing", async () => {
+  it("marks automatic cover writes and switches cover mode without publishing", async () => {
     vi.stubGlobal("window", {
       ohMyGameDesktop: { runtime: { daemonUrl: "http://127.0.0.1:43210", token: "secret" } },
     });
@@ -673,16 +688,21 @@ describe("renderer project API", () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(Response.json({ mode: "custom" }))
       .mockResolvedValueOnce(new Response(null, { status: 204 }))
+      .mockResolvedValueOnce(new Response(null, { status: 204 }))
       .mockResolvedValueOnce(new Response(null, { status: 204 }));
     vi.stubGlobal("fetch", fetchMock);
     await expect(getProjectCoverState("project-1")).resolves.toEqual({ mode: "custom" });
     await setProjectCover("project-1", cover, "auto");
-    await restoreAutomaticProjectCover("project-1");
+    await setProjectCoverMode("project-1", "custom");
+    await setProjectCoverMode("project-1", "auto");
     expect(fetchMock).toHaveBeenNthCalledWith(2, "http://127.0.0.1:43210/projects/project-1/cover?source=auto", {
       method: "PUT", headers: { "content-type": "image/webp", authorization: "Bearer secret" }, body: cover,
     });
-    expect(fetchMock).toHaveBeenNthCalledWith(3, "http://127.0.0.1:43210/projects/project-1/cover", {
-      method: "DELETE", headers: { authorization: "Bearer secret" },
+    expect(fetchMock).toHaveBeenNthCalledWith(3, "http://127.0.0.1:43210/projects/project-1/cover/state", {
+      method: "PUT", headers: { "content-type": "application/json", authorization: "Bearer secret" }, body: JSON.stringify({ mode: "custom" }),
+    });
+    expect(fetchMock).toHaveBeenNthCalledWith(4, "http://127.0.0.1:43210/projects/project-1/cover/state", {
+      method: "PUT", headers: { "content-type": "application/json", authorization: "Bearer secret" }, body: JSON.stringify({ mode: "auto" }),
     });
   });
 

@@ -1,11 +1,13 @@
-import { Check, ChevronDown, ChevronLeft, ChevronRight, Search, Settings } from "./icons.js";
+import { Check, ChevronDown, Search, Settings } from "./icons.js";
 import { useEffect, useId, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import type { AgentModel, AgentModelCatalog, AgentModelRef, AgentReasoningLevel } from "../shared/contracts.js";
-import { clampReasoningLevel, reasoningLabel } from "../shared/reasoning.js";
+import { clampReasoningLevel } from "../shared/reasoning.js";
+import { reasoningLabel } from "./reasoning-label.js";
 import { listModels, MODELS_CHANGED_EVENT, waitForRuntime } from "./api.js";
 import { menuPlacement } from "./popover-placement.js";
 import { settingsHash } from "./routes.js";
+import { t } from "./i18n.js";
 
 interface ModelSelectorProps {
   models: AgentModel[];
@@ -27,6 +29,7 @@ export function ModelSelector({ models, status = "ready", value, reasoningLevel,
   const [query, setQuery] = useState("");
   const root = useRef<HTMLDivElement>(null);
   const trigger = useRef<HTMLButtonElement>(null);
+  const reasoningTrigger = useRef<HTMLButtonElement>(null);
   const popover = useRef<HTMLDivElement>(null);
   const search = useRef<HTMLInputElement>(null);
   const menuId = useId();
@@ -43,14 +46,14 @@ export function ModelSelector({ models, status = "ready", value, reasoningLevel,
 
   function close(restoreFocus = false): void {
     setPanel(undefined);
-    if (restoreFocus) trigger.current?.focus();
+    if (restoreFocus) (showReasoning ? reasoningTrigger : trigger).current?.focus();
   }
 
-  function toggle(): void {
-    if (open) { close(); return; }
+  function toggle(next: ModelPanel): void {
+    if (panel === next) { close(); return; }
     setQuery("");
     setPosition(undefined);
-    setPanel("models");
+    setPanel(next);
   }
 
   function select(model: AgentModel): void {
@@ -60,7 +63,7 @@ export function ModelSelector({ models, status = "ready", value, reasoningLevel,
 
   useLayoutEffect(() => {
     if (!panel) return;
-    const anchor = trigger.current?.getBoundingClientRect();
+    const anchor = (panel === "reasoning" ? reasoningTrigger : trigger).current?.getBoundingClientRect();
     const bounds = popover.current?.getBoundingClientRect();
     if (anchor && bounds) setPosition(menuPlacement(anchor, bounds, { width: window.innerWidth, height: window.innerHeight }, canvas ? "start" : "end", placement));
     // Query changes keep the popup anchored in place while its list shrinks.
@@ -104,9 +107,11 @@ export function ModelSelector({ models, status = "ready", value, reasoningLevel,
     if (!supportsReasoning) setPanel((current) => current === "reasoning" ? undefined : current);
   }, [supportsReasoning]);
 
-  const unavailableLabel = status === "loading" ? "Loading models..."
-    : status === "error" ? "Could not load models"
-    : "No language model";
+  const unavailableLabel = status === "loading" ? t("modelSelector.loading")
+    : status === "error" ? t("modelSelector.error")
+    : t("modelSelector.none");
+  const reasoningName = reasoningLabel(effectiveReasoning);
+  const reasoningTitle = t("modelSelector.reasoning", { level: reasoningName });
 
   return (
     <div className={`model-selector${canvas ? " model-selector-canvas" : ""}`} ref={root}>
@@ -114,13 +119,13 @@ export function ModelSelector({ models, status = "ready", value, reasoningLevel,
         ref={trigger}
         className={canvas ? "canvas-chip is-wide" : "model-selector-trigger"}
         type="button"
-        aria-label={canvas ? `Text model: ${current?.name ?? unavailableLabel}` : "Model"}
-        aria-controls={menuId}
-        aria-expanded={open}
+        aria-label={canvas ? t("modelSelector.textModel", { name: current?.name ?? unavailableLabel }) : t("modelSelector.model")}
+        aria-controls={`${menuId}-models`}
+        aria-expanded={panel === "models"}
         aria-haspopup="menu"
         disabled={disabled || (!canvas && !canSelect)}
-        onClick={toggle}
-        title={canvas && current ? `Text model: ${current.providerName} · ${current.name}${supportsReasoning ? ` · Reasoning: ${reasoningLabel(effectiveReasoning)}` : ""}` : "Model"}
+        onClick={() => toggle("models")}
+        title={canvas && current ? t("modelSelector.textModelTitle", { provider: current.providerName, name: current.name }) : t("modelSelector.model")}
       >
         {canvas ? <span>{current?.name ?? unavailableLabel}</span> : <span className="model-selector-current">
           <span className="model-selector-name">{current?.name ?? unavailableLabel}</span>
@@ -129,22 +134,37 @@ export function ModelSelector({ models, status = "ready", value, reasoningLevel,
         <ChevronDown aria-hidden="true" size={12} />
       </button>
 
+      {supportsReasoning ? <button
+        ref={reasoningTrigger}
+        className={`${canvas ? "canvas-chip" : "model-selector-trigger"} model-selector-reasoning-trigger`}
+        type="button"
+        aria-label={reasoningTitle}
+        aria-controls={`${menuId}-reasoning`}
+        aria-expanded={showReasoning}
+        aria-haspopup="menu"
+        disabled={disabled || !canSelect}
+        onClick={() => toggle("reasoning")}
+        title={reasoningTitle}
+      >
+        <span>{reasoningName}</span>
+        <ChevronDown aria-hidden="true" size={12} />
+      </button> : null}
+
       {panel ? createPortal(
-        <div className={`model-selector-popover nodrag nowheel${canvas ? " model-selector-popover-canvas" : ""}`} ref={popover} id={menuId} style={position ?? { top: 0, left: 0, visibility: "hidden" }} onKeyDown={(event) => {
+        <div className={`model-selector-popover nodrag nowheel${canvas ? " model-selector-popover-canvas" : ""}${showReasoning ? " model-selector-popover-reasoning" : ""}`} ref={popover} id={`${menuId}-${panel}`} style={position ?? { top: 0, left: 0, visibility: "hidden" }} onKeyDown={(event) => {
           if (event.nativeEvent.isComposing || event.keyCode === 229) return;
-          if (event.key === "Escape" || (showReasoning && event.key === "ArrowLeft")) {
+          if (event.key === "Escape") {
             event.preventDefault();
             event.stopPropagation();
-            if (showReasoning) setPanel("models");
-            else close(true);
+            close(true);
           } else moveModelFocus(event, popover.current, showReasoning ? undefined : search.current);
         }}>
           {!showReasoning ? (
-            <div className="model-selector-menu" role="menu" aria-label="Models">
+            <div className="model-selector-menu" role="menu" aria-label={t("models.title")}>
               <div className="model-selector-search-row">
                 <label className="model-selector-search">
                   <Search size={13} aria-hidden="true" />
-                  <input ref={search} value={query} placeholder="Search models" aria-label="Search models" onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => {
+                  <input ref={search} value={query} placeholder={t("models.search")} aria-label={t("models.search")} onChange={(event) => setQuery(event.target.value)} onKeyDown={(event) => {
                     if (event.key !== "Enter" || event.nativeEvent.isComposing || event.keyCode === 229) return;
                     event.preventDefault();
                     event.stopPropagation();
@@ -153,7 +173,7 @@ export function ModelSelector({ models, status = "ready", value, reasoningLevel,
                     select(first);
                   }} />
                 </label>
-                <button className="model-selector-manage" type="button" aria-label="Manage providers" title="Manage providers" onClick={() => {
+                <button className="model-selector-manage" type="button" aria-label={t("modelSelector.manage")} title={t("modelSelector.manage")} onClick={() => {
                   close(true);
                   window.location.hash = settingsHash("providers");
                 }}><Settings aria-hidden="true" size={13} /></button>
@@ -181,23 +201,12 @@ export function ModelSelector({ models, status = "ready", value, reasoningLevel,
                     })}
                   </div>
                 ))}
-                {visibleModels.length === 0 ? <p className="model-selector-empty" role="status">{status !== "ready" || !query.trim() ? unavailableLabel : "No matching models"}</p> : null}
+                {visibleModels.length === 0 ? <p className="model-selector-empty" role="status">{status !== "ready" || !query.trim() ? unavailableLabel : t("modelSelector.noMatch")}</p> : null}
               </div>
-              {supportsReasoning && canSelect ? (
-                <button className="model-selector-reasoning" type="button" role="menuitem" onClick={() => setPanel("reasoning")}>
-                  <span>Reasoning</span>
-                  <span className="model-selector-setting-value">{reasoningLabel(effectiveReasoning)}<ChevronRight size={12} /></span>
-                </button>
-              ) : null}
             </div>
-          ) : null}
-
-          {showReasoning ? (
-            <div className="model-selector-submenu" role="menu" aria-label="Reasoning levels">
-              <button className="model-selector-back" type="button" role="menuitem" onClick={() => setPanel("models")}>
-                <ChevronLeft size={12} />
-                <span>Reasoning</span>
-              </button>
+          ) : (
+            <div className="model-selector-reasoning-menu" role="menu" aria-label={t("customProvider.reasoningLevels")}>
+              <div className="model-selector-menu-heading">{t("models.reasoning")}</div>
               {(current?.reasoningLevels ?? []).map((level) => {
                 const selected = level === effectiveReasoning;
                 return (
@@ -218,7 +227,7 @@ export function ModelSelector({ models, status = "ready", value, reasoningLevel,
                 );
               })}
             </div>
-          ) : null}
+          )}
         </div>,
         document.body,
       ) : null}

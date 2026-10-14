@@ -2,6 +2,7 @@ import { inspectPreviewConfiguration } from "./preview-configuration.js";
 import { validatePreviewSettings } from "../shared/preview-settings.js";
 import { previewPageUrl } from "../shared/preview-page.js";
 import { PluginSetupManager, registerPluginSetupRoutes } from "./plugin-setup.js";
+import { registerPluginIconRoutes } from "./plugin-icons.js";
 import { PluginCapabilities } from "./plugin-capabilities.js";
 import { registerPluginCapabilityRoutes } from "./plugin-capability-routes.js";
 import { isUtf8 } from "node:buffer";
@@ -9,6 +10,8 @@ import { sniffImageType } from "./image-format.js";
 import { createHash, randomUUID } from "node:crypto";
 import { createReadStream } from "node:fs";
 import { readFile } from "node:fs/promises";
+import { OnboardingStore } from "./onboarding.js";
+import type { UpdateOnboardingRequest } from "../shared/onboarding.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
@@ -47,6 +50,9 @@ import { ProjectAssetError, ProjectManager, ProjectLibraryReferenceError, Projec
 import { ExampleError, ExampleStore } from "./examples.js";
 import { ModelAuthError, ModelAuthManager } from "./model-auth.js";
 import { ModelEndpointSettingsStore } from "./model-endpoint-settings.js";
+import { OpenAIImageSettingsStore } from "./openai-image-settings.js";
+import { openAIImageConnection, registerOpenAIImageRoutes } from "./openai-image-routes.js";
+import { RESPONSES_TRANSPORT_MODES, type ResponsesTransportSettings } from "../shared/contracts.js";
 import { NetworkSettingsService } from "./network-settings.js";
 import type { NetworkSettings } from "../shared/network-settings.js";
 import { normalizeCustomProvider, normalizeCustomProviderModel, ProviderModelSettingsStore } from "./provider-model-settings.js";
@@ -540,6 +546,7 @@ export function createApp(options: AppOptions = {}) {
   });
   const previews = new PreviewManager(events);
   const webSearchSettings = new WebSearchSettingsStore(dataDirectory);
+  const onboarding = new OnboardingStore(dataDirectory);
   const networkSettings = options.networkSettings ?? new NetworkSettingsService(dataDirectory);
   const meshySettings = new MediaProviderKeyStore(dataDirectory, "meshy", "Meshy");
   const tripoSettings = new MediaProviderKeyStore(dataDirectory, "tripo", "Tripo");
@@ -601,6 +608,8 @@ export function createApp(options: AppOptions = {}) {
   const publishProjectRenamed = (project: ProjectState) => {
     events.publish(project.id, "project.renamed", { project });
   };
+  const openAIImages = new OpenAIImageSettingsStore(dataDirectory);
+  const imageConnection = openAIImageConnection(openAIImages, getModelRuntime);
   const modelAuth = new ModelAuthManager(getModelRuntime, {
     // Same ID Pi's own CLI uses, persisted in the agent directory's global settings.
     getDeviceId: () => SettingsManager.create(piAgentDirectory, piAgentDirectory).getOrCreateDeviceId(),
@@ -611,6 +620,7 @@ export function createApp(options: AppOptions = {}) {
     : providerModelSettings.isEnabled(id);
   const codexImages = options.codexImages ?? new CodexSubscriptionImages();
   const providerImages = new ProviderImages(getModelRuntime, options.imageFetch, () => seedanceSettings.key("volcengine-ark"), providerEnabled, {
+    openAIConnection: () => imageConnection.resolve(),
     customProviders: () => providerModelSettings.customProviderCatalog(),
     migrateLegacyModels: (id, models) => providerModelSettings.migrateLegacyImageModels(id, models, async () => { await (await getModelRuntime()).refresh({ allowNetwork: false, providers: [id] }); }),
     defaultModel: () => providerModelSettings.defaultImageModel(),
@@ -746,6 +756,7 @@ export function createApp(options: AppOptions = {}) {
         piAgentDirectory,
         () => resolvePluginSkills([bundledPlugins, localPlugins], pluginSettings, project.type),
         Object.keys(effectiveMcp.mcpServers).length ? { factory: await pluginCapabilities.host.extension(effectiveMcp), host: pluginCapabilities.host } : undefined,
+        (provider) => providerModelSettings.responsesTransport(provider),
       );
     }),
     activeToolNames: (project, mode, session) => {
@@ -786,6 +797,7 @@ export function createApp(options: AppOptions = {}) {
     return { runtime, model };
   });
   registerPluginSetupRoutes(app, pluginSetup);
+  registerPluginIconRoutes(app, [bundledPlugins, localPlugins]);
 
   app.addContentTypeParser("image/webp", { parseAs: "buffer", bodyLimit: MAX_PROJECT_COVER_BYTES }, (_request, body, done) => {
     done(null, body);
@@ -797,11 +809,15 @@ export function createApp(options: AppOptions = {}) {
     done(null, payload);
   });
 
+  // Damaged or newer image settings fall back to the default connection instead of blocking startup.
+  const loadOpenAIImages = () => openAIImages.load().catch((err) => app.log.warn({ err }, "Could not load OpenAI image settings"));
   app.addHook("onReady", async () => {
     await networkSettings.load();
+    // A damaged welcome preference must not prevent projects from opening.
+    await onboarding.load().catch((err) => app.log.warn({ err }, "Could not load onboarding state"));
     await Promise.all([library.load(), projects.load((projectDirectory, cause) => {
       app.log.warn({ err: cause, projectDirectory }, "Could not load project; skipped during startup");
-    }), tools.load(), pluginSettings.load(), pluginCapabilities.configuration.load(), bundledPlugins.load(), preinstalledPlugins.load(), webSearchSettings.load(), openAIEndpoint.load(), meshySettings.load(), tripoSettings.load(), hyper3dSettings.load(), seedanceSettings.load(), providerModelSettings.load()]);
+    }), tools.load(), pluginSettings.load(), pluginCapabilities.configuration.load(), bundledPlugins.load(), preinstalledPlugins.load(), webSearchSettings.load(), openAIEndpoint.load(), loadOpenAIImages(), meshySettings.load(), tripoSettings.load(), hyper3dSettings.load(), seedanceSettings.load(), providerModelSettings.load()]);
     for (const error of await preinstalledPlugins.seed(localPlugins)) app.log.warn(error);
     const examplesWarning = await examples.load();
     if (examplesWarning) app.log.warn(examplesWarning);
@@ -1764,6 +1780,7 @@ export function createApp(options: AppOptions = {}) {
     const cover = await projects.cover(projectId);
     const project = projects.get(projectId);
     if (cover || project?.type !== "interactive-story") return cover;
+    if ((await projects.coverState(projectId)).mode === "custom") return undefined;
     return readPlayableCover(project.workspacePath);
   };
 
@@ -1783,6 +1800,17 @@ export function createApp(options: AppOptions = {}) {
     return projects.coverState(request.params.projectId);
   });
 
+  app.put<{ Params: { projectId: string }; Body: { mode?: string } }>("/projects/:projectId/cover/state", async (request, reply) => {
+    const project = projects.get(request.params.projectId);
+    if (!project) return reply.code(404).send({ error: "Project not found" });
+    const mode = request.body?.mode;
+    if (mode !== "auto" && mode !== "custom") return reply.code(400).send({ error: "Invalid cover mode" });
+    const fallback = mode === "custom" && project.type === "interactive-story"
+      ? await readPlayableCover(project.workspacePath) : undefined;
+    await projects.setCoverMode(project.id, mode, fallback);
+    return reply.code(204).send();
+  });
+
   app.put<{ Params: { projectId: string }; Querystring: { source?: string }; Body: Buffer }>("/projects/:projectId/cover", async (request, reply) => {
     if (!projects.get(request.params.projectId)) return reply.code(404).send({ error: "Project not found" });
     const source = request.query.source ?? "custom";
@@ -1794,7 +1822,7 @@ export function createApp(options: AppOptions = {}) {
 
   app.delete<{ Params: { projectId: string } }>("/projects/:projectId/cover", async (request, reply) => {
     if (!projects.get(request.params.projectId)) return reply.code(404).send({ error: "Project not found" });
-    await projects.restoreAutomaticCover(request.params.projectId);
+    await projects.setCoverMode(request.params.projectId, "auto");
     return reply.code(204).send();
   });
 
@@ -2013,15 +2041,20 @@ export function createApp(options: AppOptions = {}) {
     const customModels = new Map(customProviders.map((provider) => [provider.id, provider]));
     const customImageProviders = new Set(customProviders
       .filter((provider) => CUSTOM_IMAGE_MODEL_APIS.some((api) => api === provider.api)).map((provider) => provider.id));
+    const image = openAIImages.get();
     const providers = piProviders
       .map((provider) => {
         const custom = customModels.get(provider.id);
+        const imageConfigured = provider.id === "openai" && (image.mode === "separate" ? image.configured : image.mode === "connection" && provider.configured && provider.credentialType !== "oauth");
+        const configured = provider.configured || imageConfigured;
         return {
           ...provider,
+          configured,
+          ...(provider.id === "openai" ? { languageConfigured: provider.configured, imageConfigured } : {}),
           enabled: providerEnabled(provider.id),
           custom: providerModelSettings.isCustom(provider.id),
           ...(custom?.preset ? { preset: custom.preset } : {}),
-          status: provider.configured ? "connected" as const : "not_configured" as const,
+          status: configured ? "connected" as const : "not_configured" as const,
           capabilities: custom?.modelConfigurationVersion === 2
             ? [...new Set(custom.models.flatMap(modelUsageList))]
             : provider.id === "openrouter"
@@ -2062,6 +2095,34 @@ export function createApp(options: AppOptions = {}) {
     return [...providers, ...directProviders, codexProvider, ...await cloudModels.providers(providerEnabled)].sort((left, right) => left.name.localeCompare(right.name));
   };
   app.get("/settings/providers", providerSummaries);
+  // Upstream's independent OpenAI Images connection must coexist with our
+  // optional Codex / ChatGPT image provider, not replace its routes.
+  registerOpenAIImageRoutes(app, openAIImages, imageConnection, options.modelDiscoveryFetch);
+  app.get("/settings/onboarding", async () => {
+    if (!onboarding.initialized) {
+      const existingSetup = projects.list().length > 0 || (await providerSummaries())
+        .some((provider) => ("languageConfigured" in provider ? provider.languageConfigured ?? provider.configured : provider.configured)
+          && provider.capabilities.some((capability) => capability === "language"));
+      await onboarding.initialize(existingSetup
+        ? { status: "completed", step: "connect" }
+        : { status: "pending", step: "welcome" });
+    }
+    return onboarding.get();
+  });
+  app.put<{ Body: UpdateOnboardingRequest }>("/settings/onboarding", {
+    schema: { body: {
+      type: "object", additionalProperties: false, required: ["status", "step"],
+      properties: { status: { enum: ["pending", "completed", "skipped"] }, step: { enum: ["welcome", "connect"] } },
+    } },
+  }, async (request, reply) => {
+    if (request.body.status === "completed") {
+      const runtime = await getModelRuntime();
+      const available = resolveModels(runtime, (await runtime.getAvailable()).filter((model) => providerEnabled(model.provider)))
+        .filter((model) => providerModelSettings.isVisible(model));
+      if (!available.length) return reply.code(409).send({ error: "Connect a language model before completing setup." });
+    }
+    return onboarding.update(request.body);
+  });
   app.get<{ Querystring: { refresh?: string } }>("/settings/models/providers/codex-app-server/status", async (request) => ({
     ...await codexImages.connection(request.query.refresh === "true"),
     enabled: providerEnabled("codex-app-server"),
@@ -2176,6 +2237,7 @@ export function createApp(options: AppOptions = {}) {
         else if (seedance) await seedanceSettings.clear(providerId);
         else await runtime.logout(providerId);
         await syncOpenAIEndpoint(runtime);
+        if (providerId === "openai") await openAIImages.clear(false);
       });
     } catch (cause) {
       if (previousEndpoint) await openAIEndpoint.update(previousEndpoint);
@@ -2224,6 +2286,24 @@ export function createApp(options: AppOptions = {}) {
   });
 
   app.get("/settings/models/providers/openai/endpoint", async () => openAIEndpoint.get());
+
+  const supportsResponsesTransport = async (providerId: string) => providerId === "openai"
+    || (await providerModelSettings.customProvider(providerId))?.api === "openai-responses"
+    || (await getModelRuntime()).getModels(providerId).some((model) => model.api === "openai-responses");
+  app.get<{ Params: { providerId: string } }>("/settings/models/providers/:providerId/transport", async (request, reply) => {
+    if (!await supportsResponsesTransport(request.params.providerId)) return reply.code(404).send({ error: "Responses provider not found" });
+    return { mode: providerModelSettings.responsesTransport(request.params.providerId) };
+  });
+  app.put<{ Params: { providerId: string }; Body: ResponsesTransportSettings }>("/settings/models/providers/:providerId/transport", {
+    schema: { body: { type: "object", additionalProperties: false, required: ["mode"], properties: { mode: { type: "string", enum: [...RESPONSES_TRANSPORT_MODES] } } } },
+  }, async (request, reply) => {
+    if (!await supportsResponsesTransport(request.params.providerId)) return reply.code(404).send({ error: "Responses provider not found" });
+    try {
+      await providerModelSettings.setResponsesTransport(request.params.providerId, request.body.mode);
+      return { mode: providerModelSettings.responsesTransport(request.params.providerId) };
+    }
+    catch (cause) { return reply.code(400).send({ error: cause instanceof Error ? cause.message : String(cause) }); }
+  });
 
   const hasModelProvider = async (runtime: ModelRuntime, id: string) => isNative3DProvider(id) || Boolean(runtime.getProvider(id))
     || id.startsWith("cloud-") && (await cloudModels.cloudCatalog()).providers.some((provider) => provider.id === id);

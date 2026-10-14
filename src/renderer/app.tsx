@@ -16,10 +16,13 @@ import { pluginMentionToken } from "../shared/plugins.js";
 import { createConversation, createProject, MODELS_CHANGED_EVENT } from "./api.js";
 import type { ComposerDraft } from "./composer.js";
 import { runtimeConnection, useReadyRuntimeGeneration } from "./runtime-connection.js";
+import { Onboarding, OnboardingLoading } from "./onboarding.js";
+import { useOnboarding } from "./use-onboarding.js";
 
 export function App() {
   const serviceGeneration = useReadyRuntimeGeneration();
   const [route, setRoute] = useState(() => parseAppRoute(window.location.hash));
+  const onboarding = useOnboarding(route.page === "home");
   const [initialPrompt, setInitialPrompt] = useState<{ generation: number; conversationId: string; prompt: string; mentions: PluginMention[]; images: PromptImage[]; mode: PromptMode; attachments?: PromptAttachment[] }>();
   const [initialDraft, setInitialDraft] = useState<{ conversationId: string; draft: ComposerDraft }>();
   const [initialCanvasNode, setInitialCanvasNode] = useState<{ projectId: string; nodeId: string }>();
@@ -51,9 +54,15 @@ export function App() {
     };
   }, []);
 
+  if ((route.page === "home" || onboarding.replaying) && onboarding.state?.status === "pending") {
+    return <Onboarding step={onboarding.state.step}
+      onStepChange={(step) => onboarding.save({ status: "pending", step })}
+      onFinish={async (status) => { await onboarding.save({ status, step: onboarding.state?.step ?? "welcome" }); goHome(); }} />;
+  }
+  if (route.page === "home" && !onboarding.state) return <OnboardingLoading error={onboarding.error} onRetry={onboarding.retry} />;
   if (route.page === "plugin-builder") return <PluginBuilder key={route.sessionId} sessionId={route.sessionId} />;
   if (route.page === "settings") {
-    return <SettingsPage section={route.section} pluginId={route.pluginId} onBack={leaveSettings} onSectionChange={navigateToSettingsSection} onPluginChange={navigateToPlugin} onTryPlugin={tryPlugin} />;
+    return <SettingsPage section={route.section} pluginId={route.pluginId} onBack={leaveSettings} onSectionChange={navigateToSettingsSection} onPluginChange={navigateToPlugin} onTryPlugin={tryPlugin} onOpenOnboarding={onboarding.open} />;
   }
   if (route.page === "home") {
     return <Home onNavigate={navigateToSidebarPage} onCreate={openCreatedProject} onOpen={openProject} />;

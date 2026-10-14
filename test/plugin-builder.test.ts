@@ -2,6 +2,8 @@ import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promis
 import { tmpdir } from "node:os";
 import path from "node:path";
 import Fastify from "fastify";
+import sharp from "sharp";
+import { registerPluginIconRoutes, validatePluginIconImage } from "../src/daemon/plugin-icons.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { PluginSetupManager, registerPluginSetupRoutes } from "../src/daemon/plugin-setup.js";
 import { PluginCapabilities } from "../src/daemon/plugin-capabilities.js";
@@ -30,6 +32,7 @@ async function environment() {
   const setup = manager();
   const app = Fastify();
   registerPluginSetupRoutes(app, setup);
+  registerPluginIconRoutes(app, [local]);
   cleanup.push(() => app.close());
   return { directory, agentDir, settings, local, capabilities, setup, manager, app, invalidate };
 }
@@ -50,6 +53,144 @@ async function writeDraft(directory: string, sessionId: string, mcp = false) {
 }
 
 describe("Plugin Builder", () => {
+  it("saves preset icons with revision checks and retains them after install and restart", async () => {
+    const { setup, directory, local, app, manager } = await environment();
+    const state = await setup.create();
+    const draft = await setup.prepare(state.id, await writeDraft(directory, state.id));
+    const changed = await app.inject({ method: "PUT", url: `/plugins/setup-sessions/${state.id}/icon`, payload: {
+      revision: draft.revision, icon: { type: "preset", id: "palette" },
+    } });
+    expect(changed.statusCode, changed.body).toBe(200);
+    const preview = changed.json();
+    expect(preview.plugin.icon).toEqual({ type: "preset", id: "palette" });
+    expect(preview.revision).not.toBe(draft.revision);
+    expect((await app.inject({ method: "PUT", url: `/plugins/setup-sessions/${state.id}/icon`, payload: {
+      revision: draft.revision, icon: { type: "preset", id: "image" },
+    } })).statusCode).toBe(409);
+    expect((await app.inject({ method: "PUT", url: `/plugins/setup-sessions/${state.id}/icon`, payload: {
+      revision: preview.revision, icon: { type: "preset", id: "invented" },
+    } })).statusCode).toBe(409);
+    await expect(setup.installDraft(state.id, draft.revision!)).rejects.toThrow("changed");
+    await setup.installDraft(state.id, preview.revision);
+    expect((await local.read("personal:design-review"))?.icon).toEqual(preview.plugin.icon);
+    const resumed = manager(); cleanup.push(() => resumed.close());
+    expect((await resumed.draft(state.id)).plugin?.icon).toEqual(preview.plugin.icon);
+    const reset = await resumed.updateIcon(state.id, { revision: preview.revision, icon: null });
+    expect(reset.plugin?.icon).toBeUndefined();
+    expect((await local.read("personal:design-review"))?.icon).toEqual(preview.plugin.icon);
+    await resumed.installDraft(state.id, reset.revision!);
+    expect((await local.read("personal:design-review"))?.icon).toBeUndefined();
+  });
+
+  it.each(["png", "webp"] as const)("uploads, previews, installs and updates %s icons", async format => {
+    const { setup, directory, local, app } = await environment();
+    const state = await setup.create();
+    const root = await writeDraft(directory, state.id);
+    const draft = await setup.prepare(state.id, root);
+    const bytes = await sharp({ create: { width: 32, height: 32, channels: 4, background: "#ed563b" } }).toFormat(format).toBuffer();
+    const result = await app.inject({ method: "PUT", url: `/plugins/setup-sessions/${state.id}/icon`, payload: {
+      revision: draft.revision, image: { mediaType: `image/${format}`, data: bytes.toString("base64") },
+    } });
+    expect(result.statusCode, result.body).toBe(200);
+    const preview = result.json();
+    expect(preview.plugin.icon).toMatchObject({ type: "asset" });
+    expect(await readFile(path.join(root, preview.plugin.icon.path))).toEqual(bytes);
+    const icon = await app.inject({ url: `/plugins/setup-sessions/${state.id}/icon` });
+    expect(icon.headers["content-type"]).toBe(`image/${format}`);
+    expect(icon.headers["x-content-type-options"]).toBe("nosniff");
+    expect(icon.rawPayload).toEqual(bytes);
+    const pathPreview = await app.inject({ url: `/plugins/setup-sessions/${state.id}/icon?${new URLSearchParams({ path: preview.plugin.icon.path })}` });
+    expect(pathPreview.rawPayload).toEqual(bytes);
+    await setup.installDraft(state.id, preview.revision);
+    const installedIcon = await app.inject({ url: "/plugins/personal%3Adesign-review/icon" });
+    expect(installedIcon.rawPayload).toEqual(bytes);
+    expect(installedIcon.headers["cache-control"]).toBe("private, no-cache");
+    const etag = installedIcon.headers.etag;
+    expect(etag).toBe(`"${preview.plugin.iconRevision}"`);
+    const unchanged = await app.inject({ url: "/plugins/personal%3Adesign-review/icon", headers: { "if-none-match": `W/${etag}` } });
+    expect(unchanged.statusCode).toBe(304);
+    expect(unchanged.rawPayload.length).toBe(0);
+    const installedPath = path.join((await local.installedPath("personal:design-review"))!, preview.plugin.icon.path);
+    const replacement = await sharp({ create: { width: 32, height: 32, channels: 4, background: "#386def" } }).toFormat(format).toBuffer();
+    await writeFile(installedPath, replacement);
+    const modified = await app.inject({ url: "/plugins/personal%3Adesign-review/icon", headers: { "if-none-match": etag } });
+    expect(modified.statusCode).toBe(200);
+    expect(modified.headers.etag).not.toBe(etag);
+    expect(modified.rawPayload).toEqual(replacement);
+    await writeFile(installedPath, replacement.subarray(0, 20));
+    expect((await app.inject({ url: "/plugins/personal%3Adesign-review/icon", headers: { "if-none-match": modified.headers.etag } })).statusCode).toBe(404);
+    expect((await local.read("personal:design-review"))?.icon).toBeUndefined();
+    expect((await local.list()).errors).toEqual([]);
+    await writeFile(installedPath, bytes);
+    const imported = new LocalPluginStore(directory);
+    expect((await imported.read("personal:design-review"))?.icon).toEqual(preview.plugin.icon);
+    const next = await setup.updateIcon(state.id, { revision: preview.revision, icon: { type: "preset", id: "music" } });
+    await setup.installDraft(state.id, next.revision!);
+    expect((await app.inject({ url: "/plugins/personal%3Adesign-review/icon" })).statusCode).toBe(404);
+    await local.remove("personal:design-review");
+    expect((await app.inject({ url: "/plugins/personal%3Adesign-review/icon" })).statusCode).toBe(404);
+  });
+
+  it("rejects invalid image contents, large images, missing files and paths outside the package", async () => {
+    const { setup, directory, app } = await environment();
+    const state = await setup.create();
+    const root = await writeDraft(directory, state.id);
+    const draft = await setup.prepare(state.id, root);
+    await expect(setup.updateIcon(state.id, { revision: draft.revision!, image: { mediaType: "image/png", data: Buffer.from("not an image").toString("base64") } })).rejects.toThrow("PNG or WebP");
+    await expect(validatePluginIconImage(Buffer.alloc(1024 * 1024 + 1))).rejects.toThrow("1 MB");
+    const oversized = await sharp({ create: { width: 2049, height: 1, channels: 4, background: "red" } }).png().toBuffer();
+    await expect(validatePluginIconImage(oversized)).rejects.toThrow("2048");
+    for (const resource of ["./missing.png", "./../outside.png", "/tmp/icon.png", "https://example.com/icon.png", "./assets/icon.svg"]) {
+      await expect(setup.updateIcon(state.id, { revision: draft.revision!, icon: { type: "asset", path: resource } })).rejects.toThrow();
+    }
+    const bytes = await sharp({ create: { width: 2, height: 2, channels: 4, background: "red" } }).png().toBuffer();
+    await writeFile(path.join(directory, "outside.png"), bytes);
+    await symlink(path.join(directory, "outside.png"), path.join(root, "linked.png"));
+    expect((await app.inject({ url: `/plugins/setup-sessions/${state.id}/icon?path=./linked.png` })).statusCode).toBe(404);
+    expect((await app.inject({ url: `/plugins/setup-sessions/${state.id}/icon?path=./../outside.png` })).statusCode).toBe(404);
+  });
+
+  it.each(["missing", "oversized", "undecodable"])("loads a plugin with an %s icon while Builder validation stays strict", async kind => {
+    const { setup, directory, local } = await environment();
+    const state = await setup.create();
+    const root = await writeDraft(directory, state.id);
+    const manifestPath = path.join(root, ".ohmygame-plugin/plugin.json");
+    const manifest = JSON.parse(await readFile(manifestPath, "utf8"));
+    manifest.interface.icon = { type: "asset", path: "./assets/icon.png" };
+    await writeFile(manifestPath, JSON.stringify(manifest));
+    if (kind !== "missing") {
+      await mkdir(path.join(root, "assets"));
+      const bytes = kind === "oversized" ? Buffer.alloc(1024 * 1024 + 1)
+        : (await sharp({ create: { width: 2, height: 2, channels: 4, background: "red" } }).png().toBuffer()).subarray(0, 20);
+      await writeFile(path.join(root, "assets/icon.png"), bytes);
+    }
+    const draft = await setup.prepare(state.id, root);
+    expect(draft.errors.length).toBeGreaterThan(0);
+    expect(draft.plugin).toBeUndefined();
+    await expect(setup.installDraft(state.id, draft.revision ?? "a".repeat(64))).rejects.toThrow();
+    const installed = await local.install(root);
+    expect(installed.icon).toBeUndefined();
+    expect(installed.skills).toHaveLength(1);
+    expect((await local.read(installed.id))?.icon).toBeUndefined();
+    expect(await local.list()).toMatchObject({ plugins: [{ id: installed.id }], errors: [] });
+  });
+
+  it("reuses successful image validation by content while checking each requested media type", async () => {
+    const { PhotonImage } = await import("@silvia-odwyer/photon-node");
+    const decode = vi.spyOn(PhotonImage, "new_from_byteslice");
+    try {
+      const bytes = await sharp({ create: { width: 17, height: 13, channels: 4, background: "#40a976" } }).png().toBuffer();
+      const [first, second] = await Promise.all([validatePluginIconImage(bytes), validatePluginIconImage(Buffer.from(bytes))]);
+      expect(second.revision).toBe(first.revision);
+      expect(decode).toHaveBeenCalledTimes(1);
+      await expect(validatePluginIconImage(bytes, "image/webp")).rejects.toThrow("PNG or WebP");
+      expect(decode).toHaveBeenCalledTimes(1);
+      const changed = await sharp({ create: { width: 17, height: 13, channels: 4, background: "#40a977" } }).png().toBuffer();
+      expect((await validatePluginIconImage(changed)).revision).not.toBe(first.revision);
+      expect(decode).toHaveBeenCalledTimes(2);
+    } finally { decode.mockRestore(); }
+  });
+
   it("keeps new workspaces separate, lists them after restart, and retains interrupted status", async () => {
     const { setup, directory, manager } = await environment();
     const first = await setup.create(), second = await setup.create();

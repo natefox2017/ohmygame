@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState, type FormEvent } from "react";
 import { LoaderCircle, X } from "./icons.js";
+import { t } from "./i18n.js";
 import type { ProjectState } from "../shared/contracts.js";
 import {
   listProjectCheckpoints,
@@ -12,22 +13,22 @@ type RestoreChoice = { id: string; title: string; details: string; kind: "undo" 
 
 function checkpointChoices(history: ProjectCheckpointHistory): RestoreChoice[] {
   if (history.unfinished) {
-    return [{ id: "interrupted", title: "Recover interrupted restore", details: "Return to the state saved before the interrupted operation", kind: "restore", value: history.unfinished }];
+    return [{ id: "interrupted", title: t("checkpointRestore.interrupted"), details: t("checkpointRestore.interruptedHint"), kind: "restore", value: history.unfinished }];
   }
   const turns = history.turns.flatMap((turn) => {
     const time = new Date(turn.finishedAt ?? turn.startedAt).toLocaleString();
     const files = turn.changes ?? [];
     const details = files.length
-      ? `${files.length} files: ${files.slice(0, 4).map((file) => file.path).join(", ")}${files.length > 4 ? ", …" : ""}`
-      : "No recorded file changes";
+      ? t("checkpointRestore.files", { count: files.length, paths: `${files.slice(0, 4).map((file) => file.path).join(", ")}${files.length > 4 ? ", …" : ""}` })
+      : t("checkpointRestore.noChanges");
     return [
-      ...(turn.after ? [{ id: `undo:${turn.turnId}`, title: `Undo Agent turn · ${time}`, details, kind: "undo" as const, value: turn.turnId }] : []),
-      { id: `before:${turn.turnId}`, title: `Restore before · ${time}`, details, kind: "restore" as const, value: turn.before },
+      ...(turn.after ? [{ id: `undo:${turn.turnId}`, title: t("checkpointRestore.undo", { time }), details, kind: "undo" as const, value: turn.turnId }] : []),
+      { id: `before:${turn.turnId}`, title: t("checkpointRestore.before", { time }), details, kind: "restore" as const, value: turn.before },
     ];
   });
   const recoveries = [...history.recoveries].slice(-3).reverse().map((commit, index) => ({
-    id: `recovery:${commit}`, title: `Revert earlier restore #${index + 1}`,
-    details: "Return to the state saved just before an earlier recovery",
+    id: `recovery:${commit}`, title: t("checkpointRestore.revert", { index: index + 1 }),
+    details: t("checkpointRestore.revertHint"),
     kind: "restore" as const, value: commit,
   }));
   return [...turns, ...recoveries];
@@ -103,15 +104,15 @@ export function ProjectCheckpointDialog({ project, onClose, onRecovered }: {
     }}>
       <section ref={dialog} className="project-create-dialog" role="dialog" aria-modal="true" aria-labelledby={titleId} tabIndex={-1}>
         <header>
-          <h2 id={titleId}>Restore · {project.name}</h2>
-          <button type="button" disabled={saving} onClick={onClose} aria-label="Close"><X size={16} /></button>
+          <h2 id={titleId}>{t("checkpointRestore.title", { name: project.name })}</h2>
+          <button type="button" disabled={saving} onClick={onClose} aria-label={t("checkpointRestore.close")}><X size={16} /></button>
         </header>
         <form onSubmit={(event) => void submit(event)}>
-          {loading ? <p role="status"><LoaderCircle size={14} className="spin" /> Loading recovery history…</p> : null}
-          {!loading && !choices.length ? <p>No recovery points yet. One will be created before the next Agent turn.</p> : null}
+          {loading ? <p role="status"><LoaderCircle size={14} className="spin" /> {t("checkpointRestore.loading")}</p> : null}
+          {!loading && !choices.length ? <p>{t("checkpointRestore.empty")}</p> : null}
           {choices.length > 0 ? (
             <fieldset className="project-create-types" style={{ maxHeight: "min(48vh, 360px)", overflowY: "auto", display: "grid", gridTemplateColumns: "1fr", gap: 6 }}>
-              <legend>Saved versions (newest first)</legend>
+              <legend>{t("checkpointRestore.savedVersions")}</legend>
               {choices.map((choice) => (
                 <button key={choice.id} type="button" disabled={saving} aria-pressed={choice.id === selectedId}
                   className={choice.id === selectedId ? "is-active" : undefined}
@@ -124,14 +125,14 @@ export function ProjectCheckpointDialog({ project, onClose, onRecovered }: {
             </fieldset>
           ) : null}
           {confirming ? (
-            <p role="alert">Confirm recovery: project files may be replaced or removed. Close other editors first. The current state is preserved as a reversible recovery point.</p>
+            <p role="alert">{t("checkpointRestore.confirmWarning")}</p>
           ) : null}
           {error ? <p className="project-create-error" role="alert">{error}</p> : null}
           <footer>
-            <button type="button" disabled={saving} onClick={onClose}>Cancel</button>
+            <button type="button" disabled={saving} onClick={onClose}>{t("checkpointRestore.cancel")}</button>
             <button className="project-create-submit" type="submit" disabled={!selected || saving}>
               {saving ? <LoaderCircle className="spin" size={14} /> : null}
-              {confirming ? "Confirm restore" : "Continue"}
+              {confirming ? t("checkpointRestore.confirm") : t("checkpointRestore.continue")}
             </button>
           </footer>
         </form>

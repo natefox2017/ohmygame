@@ -18,6 +18,7 @@ import {
   type PluginSource,
 } from "../shared/plugins.js";
 import { parseSkillMetadata } from "./skill-metadata.js";
+import { readPluginIconAsset } from "./plugin-icons.js";
 
 const MAX_PLUGIN_DEPTH = 64;
 
@@ -200,6 +201,13 @@ export class LocalPluginStore {
     return record ? this.#installedPath(record.marketplace.id, record.name, record.version) : undefined;
   }
 
+  async readIcon(id: string) {
+    await this.#mutations;
+    const record = (await this.#readIndex()).find((item) => pluginRecordId(item) === id);
+    if (!record) return undefined;
+    return readPluginIconAsset(this.#installedPath(record.marketplace.id, record.name, record.version), record.manifest.interface?.icon);
+  }
+
   async directoryPath(id: string): Promise<string | undefined> {
     const record = (await this.#readIndex()).find((item) => pluginRecordId(item) === id);
     if (!record) return undefined;
@@ -277,6 +285,11 @@ export async function inspectPluginBundle(
 ): Promise<PluginDetail> {
   await validatePluginBundle(pluginRoot);
   const manifest = normalizedManifest ?? await readPluginManifest(pluginRoot);
+  let icon = manifest.interface?.icon;
+  const iconAsset = await readPluginIconAsset(pluginRoot, icon).catch(() => {
+    icon = undefined;
+    return undefined;
+  });
   const skills = manifest.skills
     ? (await Promise.all((Array.isArray(manifest.skills) ? manifest.skills : [manifest.skills]).map((skillPath) => skillComponents(pluginRoot, skillPath)))).flat()
     : [];
@@ -290,6 +303,8 @@ export async function inspectPluginBundle(
     displayName: manifest.interface?.displayName ?? displayName(manifest.name),
     description: manifest.interface?.shortDescription ?? manifest.description,
     longDescription: manifest.interface?.longDescription,
+    icon,
+    iconRevision: iconAsset?.revision,
     version: manifest.version,
     marketplace: identity.marketplace,
     source: identity.source,
@@ -305,7 +320,7 @@ export async function inspectPluginBundle(
   };
 }
 
-async function readPluginManifest(pluginRoot: string): Promise<PluginManifest> {
+export async function readPluginManifest(pluginRoot: string): Promise<PluginManifest> {
   const manifestPath = path.join(pluginRoot, PLUGIN_MANIFEST_PATH);
   let value: unknown;
   try {

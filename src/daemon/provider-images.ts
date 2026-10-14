@@ -29,6 +29,7 @@ const CODEX_IMAGE_MODEL: ImageModel = {
 };
 
 interface ProviderImagesOptions {
+  openAIConnection?: () => Promise<{ source?: ImageSource; models?: ImageModel[]; message?: string; connected?: boolean }>;
   customProviders?: () => Promise<CustomProviderDetails[]>;
   migrateLegacyModels?: (provider: string, models: ImageModel[]) => Promise<void>;
   defaultModel?: () => ImageModelRef | undefined;
@@ -61,7 +62,7 @@ export class ProviderImages implements ImageGenerator {
     const custom = runtime ? await this.#customImageProviders(runtime) : [];
     const entries = await Promise.all([
       runtime ? this.#openRouterEntry(runtime, signal) : undefined,
-      runtime ? this.#openAIEntry(runtime, signal) : undefined,
+      runtime || this.options.openAIConnection ? this.#openAIEntry(runtime, signal) : undefined,
       this.#seedreamEntry(),
       ...custom.map((provider) => catalogEntry(provider.id, provider.name, () => this.#customModels(runtime!, provider, signal), "Choose and enable image models in Models.")),
       this.#codexEntry(),
@@ -81,8 +82,20 @@ export class ProviderImages implements ImageGenerator {
     return catalogEntry("openrouter", "OpenRouter", () => listOpenRouterImageModels(source, this.request, signal), "OpenRouter lists no image models for this account.");
   }
 
-  async #openAIEntry(runtime: ModelRuntime, signal?: AbortSignal): Promise<CatalogEntry | undefined> {
+  async #openAIEntry(runtime: ModelRuntime | undefined, signal?: AbortSignal): Promise<CatalogEntry | undefined> {
     if (!this.isEnabled("openai")) return undefined;
+    if (this.options.openAIConnection) {
+      try {
+        const connection = await this.options.openAIConnection();
+        if (connection.connected === false) return undefined;
+        return catalogEntry("openai", "OpenAI", async () => connection.source
+          ? connection.models ?? await this.#sourceModels("openai", "OpenAI", connection.source, signal) : [],
+        connection.message ?? "Fetch or add image models, then enable them and save.");
+      } catch (cause) {
+        return { models: [], status: { provider: "openai", providerName: "OpenAI", state: "error", message: cause instanceof Error ? cause.message : String(cause) } };
+      }
+    }
+    if (!runtime) return undefined;
     const provider = runtime.getProvider("openai");
     if (!provider || !runtime.hasConfiguredAuth("openai")) return undefined;
     // OpenAI rejects image requests made with a ChatGPT sign-in ("ChatPass credential is not
@@ -179,12 +192,19 @@ export class ProviderImages implements ImageGenerator {
 
   async #selection(requested?: ImageModelRef, signal?: AbortSignal): Promise<ImageSelection | undefined> {
     if (requested?.provider === SEEDREAM_PROVIDER_ID) return this.#seedreamSelection(requested.id);
+    if (requested?.provider === "openai" && this.options.openAIConnection) return this.#configuredOpenAISelection(requested.id, signal);
     let runtime: ModelRuntime;
     try {
       runtime = await this.runtime();
     } catch (cause) {
       signal?.throwIfAborted();
-      if (!requested) return this.#seedreamSelection();
+      if (!requested) {
+        try {
+          const selection = await this.#configuredOpenAISelection(undefined, signal);
+          if (selection) return selection;
+        } catch { signal?.throwIfAborted(); }
+        return this.#seedreamSelection();
+      }
       throw cause;
     }
     if (requested?.provider === "openrouter") return this.#openRouterSelection(runtime, requested.id, signal);
@@ -198,7 +218,7 @@ export class ProviderImages implements ImageGenerator {
     // keeps its provider, and a failed generation is never retried through another one.
     const candidates = [
       () => this.#openRouterSelection(runtime, undefined, signal),
-      () => this.#compatibleSelection(runtime, "openai", undefined, signal),
+      () => this.options.openAIConnection ? this.#configuredOpenAISelection(undefined, signal) : this.#compatibleSelection(runtime, "openai", undefined, signal),
       () => this.#seedreamSelection(),
       ...custom.map((provider) => () => this.#customSelection(runtime, provider, undefined, signal)),
     ];
@@ -234,8 +254,21 @@ export class ProviderImages implements ImageGenerator {
     const provider = runtime.getProvider(providerId);
     if (!provider || !runtime.hasConfiguredAuth(providerId)) return [];
     source ??= await runtimeSource(runtime, providerId, signal);
+    return this.#sourceModels(providerId, provider.name, source, signal);
+  }
+
+  async #sourceModels(providerId: string, providerName: string, source: ImageSource, signal?: AbortSignal): Promise<ImageModel[]> {
     const [ids, catalog] = await Promise.all([modelIds(source, this.request, signal), this.#capabilityCatalog(signal)]);
-    return imageModelsForProvider(providerId, provider.name, ids, catalog);
+    return imageModelsForProvider(providerId, providerName, ids, catalog);
+  }
+
+  async #configuredOpenAISelection(requestedId?: string, signal?: AbortSignal): Promise<ImageSelection | undefined> {
+    if (!this.isEnabled("openai") || !this.options.openAIConnection) return undefined;
+    const connection = await this.options.openAIConnection();
+    if (!connection.source) return undefined;
+    const models = connection.models ?? await this.#sourceModels("openai", "OpenAI", connection.source, signal);
+    const model = requestedId ? models.find((candidate) => candidate.id === requestedId) : models[0];
+    return model ? { model, source: connection.source } : undefined;
   }
 
   /** Capabilities for models reached directly; a failed lookup falls back to each family's defaults. */

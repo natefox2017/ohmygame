@@ -46,6 +46,10 @@ vi.mock("electron", () => ({
     fromPartition: () => ({ setProxy: async () => {} }),
     defaultSession: { setProxy: async () => {} },
   },
+  screen: {
+    getCursorScreenPoint: () => ({ x: 480, y: 320 }),
+    getDisplayNearestPoint: () => ({ workArea: { x: 0, y: 0, width: 1920, height: 1080 } }),
+  },
   BrowserWindow: Object.assign(
     class {
       readonly options: Record<string, unknown>;
@@ -126,7 +130,7 @@ vi.doMock(path.resolve("src/desktop/updater.ts"), () => ({
 const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform")!;
 
 const DARK_CONTROLS = { color: "#1f1f1f", symbolColor: "#ffffff", height: 32 };
-const LIGHT_CONTROLS = { color: "#f7f7f7", symbolColor: "#202020", height: 32 };
+const LIGHT_CONTROLS = { color: "#ffffff", symbolColor: "#202020", height: 32 };
 
 beforeEach(async () => {
   // Exercise the Windows-only native chrome branch on Linux CI and macOS too.

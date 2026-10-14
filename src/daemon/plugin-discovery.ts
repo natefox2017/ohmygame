@@ -4,6 +4,7 @@ import {
   PLUGIN_MANIFEST_PATH,
   PERSONAL_MARKETPLACE,
   isPluginManifest,
+  isPluginIcon,
   type PluginInstallCandidate,
   type PluginManifest,
   type ResolvedPluginManifest,
@@ -77,7 +78,10 @@ async function discoverMarketplace(root: string, manifestPath: string): Promise<
     else if (await exists(codexPath)) manifest = await normalizeManifest(sourceRoot, await readJson(codexPath), "codex");
     else if (await exists(claudePath)) manifest = await normalizeManifest(sourceRoot, await readJson(claudePath), "claude");
     else manifest = await normalizeManifest(sourceRoot, entry, format, rawSkills.length ? rawSkills : undefined);
-    manifest = { ...manifest, skills: rebasePaths(root, sourceRoot, manifest.skills) };
+    const icon = manifest.interface?.icon;
+    manifest = { ...manifest, skills: rebasePaths(root, sourceRoot, manifest.skills), ...(icon?.type === "asset" ? {
+      interface: { ...manifest.interface, icon: { type: "asset", path: relativePath(path.relative(root, path.resolve(sourceRoot, icon.path))) } },
+    } : {}) };
     candidates.push({ ...await installCandidate(root, format, manifest, marketplaceRef), key: `marketplace:${marketplaceRef.id}:${manifest.name}` });
   }
   if (!candidates.length) throw new LocalPluginError("Plugin marketplace does not contain any plugins");
@@ -105,6 +109,7 @@ async function normalizeManifest(
     interface: {
       displayName: stringValue(ui.displayName) || displayName(name),
       shortDescription: description,
+      ...(isPluginIcon(ui.icon) ? { icon: ui.icon } : {}),
       ...(stringValue(ui.longDescription) ? { longDescription: stringValue(ui.longDescription) } : {}),
       ...(promptArray(ui.defaultPrompt).length ? { defaultPrompt: promptArray(ui.defaultPrompt) } : {}),
     },

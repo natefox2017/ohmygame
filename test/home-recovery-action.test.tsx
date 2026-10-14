@@ -10,6 +10,10 @@ const api = vi.hoisted(() => ({
   listProjects: vi.fn(),
   getProjectCover: vi.fn(),
 }));
+const exampleShelf = vi.hoisted(() => ({
+  columns: 4,
+  examples: [] as Array<{ id: string; type: "web-game"; name: string; description: string }>,
+}));
 vi.doMock(path.resolve("src/renderer/api.ts"), () => api);
 vi.doMock(path.resolve("src/renderer/runtime-connection.ts"), () => ({
   useReadyRuntimeGeneration: () => 1,
@@ -18,11 +22,13 @@ vi.doMock(path.resolve("src/renderer/use-project-activity.ts"), () => ({
   useProjectActivity: () => new Map(),
 }));
 vi.doMock(path.resolve("src/renderer/use-project-shelf-layout.ts"), () => ({
-  useProjectShelfLayout: () => ({ sectionRef: { current: null }, columns: 4, recentProjectLimit: 4 }),
+  useProjectShelfLayout: () => ({ sectionRef: { current: null }, columns: exampleShelf.columns, recentProjectLimit: 4 }),
 }));
 vi.doMock(path.resolve("src/renderer/examples.tsx"), () => ({
-  useExamples: () => ({ examples: [], covers: {} }),
-  ExampleShelf: () => null,
+  useExamples: () => ({ examples: exampleShelf.examples, covers: {} }),
+  ExampleShelf: ({ examples }: { examples: Array<{ id: string; name: string }> }) => (
+    <div data-testid="example-shelf">{examples.map((example) => <span key={example.id}>{example.name}</span>)}</div>
+  ),
 }));
 vi.doMock(path.resolve("src/renderer/app-sidebar.tsx"), () => ({ AppSidebar: () => null }));
 vi.doMock(path.resolve("src/renderer/project-prompt-creator.tsx"), () => ({ ProjectPromptCreator: () => null }));
@@ -53,6 +59,8 @@ let root: ReturnType<typeof createRoot>;
 
 beforeEach(() => {
   vi.clearAllMocks();
+  exampleShelf.columns = 4;
+  exampleShelf.examples = [];
   vi.stubGlobal("IS_REACT_ACT_ENVIRONMENT", true);
   api.waitForRuntime.mockResolvedValue(undefined);
   api.listProjects.mockResolvedValue([project]);
@@ -87,4 +95,17 @@ it("opens existing recovery dialog from a recent project's Home card and refresh
   await act(async () => dialog!.querySelector<HTMLButtonElement>("button")!.click());
   expect(document.querySelector('[role="dialog"][aria-label="Restore version"]')).toBeNull();
   expect(api.listProjects).toHaveBeenCalledTimes(2);
+});
+
+
+it("shows the full example catalog even when Home has only two grid columns", async () => {
+  exampleShelf.columns = 2;
+  exampleShelf.examples = [
+    "Circuit Craftsman", "Tidal Workshop", "Ember Route", "Wetland Birdwatching",
+  ].map((name, index) => ({ id: `game-${index}`, type: "web-game" as const, name, description: "" }));
+
+  await render();
+
+  expect([...host.querySelectorAll('[data-testid="example-shelf"] span')].map((item) => item.textContent))
+    .toEqual(exampleShelf.examples.map((example) => example.name));
 });

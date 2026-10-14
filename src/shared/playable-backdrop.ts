@@ -1,13 +1,11 @@
 import type { PlayableAssetType } from "./playable-nodes.js";
 import { scanPlayableStartTags } from "./playable-source-locations.js";
 
-/**
- * Opening tags that mark the Node's background with `data-media="backdrop"`.
- * A quoted attribute value is skipped whole, so a `>` inside it does not end
- * the tag.
- */
-const BACKDROP_TAG = /<[a-zA-Z][\w-]*\b(?:[^>"']|"[^"]*"|'[^']*')*\sdata-media\s*=\s*(?:"backdrop"|'backdrop')(?:[^>"']|"[^"]*"|'[^']*')*>/g;
-const ASSET_ATTRIBUTE = /\sdata-(?:asset|type)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s"'>/]+)/g;
+// Parsing tags must preserve quoted > characters and attribute offsets.
+// Upstream's scanner owns HTML tag boundaries; this pattern owns attributes.
+const ATTRIBUTE = /\s+([^\s=/>]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+)))?/g;
+interface BackdropAttribute { name: string; value: string | undefined; start: number; end: number }
+interface BackdropTag { index: number; text: string; attributes: BackdropAttribute[] }
 
 /** The Node's one background tag, or undefined when there is none or more than one. */
 function backdropTag(html: string): BackdropTag | undefined {

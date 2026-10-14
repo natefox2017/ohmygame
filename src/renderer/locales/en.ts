@@ -237,6 +237,23 @@ const en = {
     disabledKept: "Disabled · Your credentials and models are kept",
     baseUrlHint:
       "The OpenAI-compatible API address or relay URL. Configure a Clash network proxy in Settings → Network.",
+    codex: {
+      shortDescription: "ChatGPT subscription · Codex image generation",
+      description: "Image generation via your official Codex ChatGPT sign-in",
+      connection: "ChatGPT connection",
+      signingIn: "Waiting for browser sign-in…",
+      connected: "Connected",
+      notConnected: "Not connected",
+      checking: "Checking…",
+      connect: "Connect ChatGPT",
+      install: "Get Codex CLI",
+      refresh: "Refresh Codex connection",
+      checkingCli: "Checking the official Codex CLI…",
+      hint: "Codex image generation is separate from OpenAI coding models and requires the official Codex CLI. It uses your ChatGPT sign-in, not an OpenAI API key. Your account must support Codex image generation.",
+      useForImages: "Use Codex for images",
+      defaultNotice: "Codex Image is now your default image-generation model.",
+      openAiOAuthHint: "ChatGPT browser sign-in provides coding models, not the OpenAI Images API. To generate images with your ChatGPT subscription, connect Codex · ChatGPT Images as a separate provider.",
+    },
     description: {
       hyper3d: "Free daily credits or your API key",
       local: "Local endpoint",

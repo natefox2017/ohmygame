@@ -234,6 +234,23 @@ const zhCN: typeof en = {
     disabledKept: "已停用 · 凭据和模型会保留",
     baseUrlHint:
       "兼容 OpenAI 的 API 地址或中转地址。网络代理（Clash）请在 设置 → 网络 中配置。",
+    codex: {
+      shortDescription: "ChatGPT 订阅 · Codex 生图",
+      description: "使用官方 Codex CLI 和 ChatGPT 登录生成图片",
+      connection: "ChatGPT 连接",
+      signingIn: "等待浏览器登录…",
+      connected: "已连接",
+      notConnected: "未连接",
+      checking: "正在检查…",
+      connect: "连接 ChatGPT",
+      install: "获取 Codex CLI",
+      refresh: "刷新 Codex 连接",
+      checkingCli: "正在检查官方 Codex CLI…",
+      hint: "Codex 图片生成与 OpenAI 编程模型独立，需要安装官方 Codex CLI，并通过 ChatGPT 账号登录，而非 OpenAI API 密钥。你的账号还必须拥有 Codex 生图权限。",
+      useForImages: "使用 Codex 生成图片",
+      defaultNotice: "Codex 已设为默认图片生成模型。",
+      openAiOAuthHint: "通过 ChatGPT 浏览器登录只能连接编程模型，不能代替 OpenAI 图片 API。如需使用 ChatGPT 订阅生图，请单独连接 Codex · ChatGPT Images。",
+    },
     description: {
       hyper3d: "每日免费额度或你的 API 密钥",
       local: "本地端点",

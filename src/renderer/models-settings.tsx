@@ -305,7 +305,7 @@ function CodexImageProviderDetail({ provider, onBack }: { provider: ProviderSumm
       // The user is opting into this provider; keep coding-model defaults as-is.
       if (!connection?.enabled) await setProviderEnabled(CODEX_IMAGE_PROVIDER, true);
       await setDefaultMediaModel("image", { provider: CODEX_IMAGE_PROVIDER, id: CODEX_IMAGE_MODEL_ID });
-      setNotice("Codex Image is now your default image-generation model.");
+      setNotice(t("providers.codex.defaultNotice"));
       setRevision((value) => value + 1);
       await refreshRef.current(true);
     } catch (cause) { setError(errorMessage(cause)); }
@@ -313,26 +313,26 @@ function CodexImageProviderDetail({ provider, onBack }: { provider: ProviderSumm
   }
 
   return <section className="settings-panel settings-provider-detail">
-    <ProviderDetailHeader provider={current} description="Image generation via your official Codex ChatGPT sign-in" onBack={onBack}>
+    <ProviderDetailHeader provider={current} description={t("providers.codex.description")} onBack={onBack}>
       {connection?.available ? <ProviderEnableControl provider={current} disabled={busy} onChanged={() => { setRevision((n) => n + 1); void refreshRef.current(true); }} /> : null}
     </ProviderDetailHeader>
     <div className="settings-provider-connection">
       <div className="settings-provider-setting-row settings-provider-auth-row">
-        <span className="settings-search-field-label">ChatGPT connection</span>
+        <span className="settings-search-field-label">{t("providers.codex.connection")}</span>
         <span className="settings-provider-setting-value" role="status">
-          {connection?.connecting ? "Waiting for browser sign-in…" : connection?.available ? "Connected" : connection ? "Not connected" : "Checking…"}
+          {connection?.connecting ? t("providers.codex.signingIn") : connection?.available ? t("providers.codex.connected") : connection ? t("providers.codex.notConnected") : t("providers.codex.checking")}
         </span>
-        {connection?.connecting ? <button className="settings-secondary-button" type="button" disabled={busy} onClick={() => void cancel()}>Cancel</button>
-          : connection?.installed && !connection.available ? <button className="settings-primary-button" type="button" disabled={busy} onClick={() => void connect()}>Connect ChatGPT</button>
-          : !connection?.installed && connection ? <button className="settings-secondary-button" type="button" onClick={() => void openExternal("https://developers.openai.com/codex/cli/")}>Get Codex CLI <ExternalLink size={14} /></button>
+        {connection?.connecting ? <button className="settings-secondary-button" type="button" disabled={busy} onClick={() => void cancel()}>{t("common.cancel")}</button>
+          : connection?.installed && !connection.available ? <button className="settings-primary-button" type="button" disabled={busy} onClick={() => void connect()}>{t("providers.codex.connect")}</button>
+          : !connection?.installed && connection ? <button className="settings-secondary-button" type="button" onClick={() => void openExternal("https://developers.openai.com/codex/cli/")}>{t("providers.codex.install")} <ExternalLink size={14} /></button>
           : null}
-        <button className="icon-button settings-provider-setting-edit" type="button" title="Check Codex connection" aria-label="Refresh Codex connection" disabled={busy} onClick={() => void refreshRef.current(true)}><RefreshCw size={15} /></button>
+        <button className="icon-button settings-provider-setting-edit" type="button" title={t("providers.codex.refresh")} aria-label={t("providers.codex.refresh")} disabled={busy} onClick={() => void refreshRef.current(true)}><RefreshCw size={15} /></button>
       </div>
     </div>
-    <p className="settings-detail-hint" role="status">{connection?.message ?? "Checking the official Codex CLI…"}</p>
-    <p className="settings-detail-hint">Codex image generation is separate from OpenAI coding models and requires the official Codex CLI. It uses your ChatGPT sign-in, not an OpenAI API key. Your account must support Codex image generation.</p>
+    <p className="settings-detail-hint" role="status">{connection?.message ?? t("providers.codex.checkingCli")}</p>
+    <p className="settings-detail-hint">{t("providers.codex.hint")}</p>
     {connection?.available ? <div className="settings-form-actions">
-      <button type="button" className="settings-primary-button" disabled={busy} onClick={() => void chooseImageDefault()}>{busy ? "Saving…" : "Use Codex for images"}</button>
+      <button type="button" className="settings-primary-button" disabled={busy} onClick={() => void chooseImageDefault()}>{busy ? t("common.saving") : t("providers.codex.useForImages")}</button>
     </div> : null}
     {error ? <p className="settings-error" role="alert">{error}</p> : null}
     {notice ? <p className="settings-success" role="status">{notice}</p> : null}
@@ -840,7 +840,7 @@ function ConnectedProvider({ provider, onBack, onRemoved }: { provider: Provider
       {provider.id === "openai" && chatConnected ? <ProviderResponsesTransport providerId={provider.id} disabled={deletion.busy || Boolean(editing)} /> : null}
       {chatConnected ? <ProviderModels key={modelsRevision} providerId={provider.id} /> : null}
       {provider.id === "openai" ? <OpenAIImageModels revision={modelsRevision} disabled={deletion.busy || Boolean(editing)} onChanged={setImageConnected} /> : provider.capabilities.includes("image") ? <ProviderImageModels key={`images-${modelsRevision}`} providerId={provider.id} /> : null}
-      {provider.id === "openai" && credentialType === "oauth" ? <p className="settings-detail-hint">ChatGPT browser sign-in provides coding models, not the OpenAI Images API. To generate images with your ChatGPT subscription, connect Codex · ChatGPT Images as a separate provider.</p> : null}
+      {provider.id === "openai" && credentialType === "oauth" ? <p className="settings-detail-hint">{t("providers.codex.openAiOAuthHint")}</p> : null}
     </section>
   );
 }
@@ -1024,11 +1024,11 @@ function useProviderEndpoint(providerId: string) {
 }
 
 function providerDescription(provider: Pick<ProviderSummary, "id" | "methods" | "custom" | "preset" | "managed">): string {
-  if (provider.id === CODEX_IMAGE_PROVIDER) return "ChatGPT subscription · Codex image generation";
-  if (provider.id === "hyper3d") return "Free daily credits or your API key";
-  if (provider.managed) return "Free cloud";
-  if (isLocalModelProvider(provider)) return "Local endpoint";
-  if (provider.custom) return "Custom endpoint";
+  if (provider.id === CODEX_IMAGE_PROVIDER) return t("providers.codex.shortDescription");
+  if (provider.id === "hyper3d") return t("providers.description.hyper3d");
+  if (provider.managed) return t("providers.group.free");
+  if (isLocalModelProvider(provider)) return t("providers.description.local");
+  if (provider.custom) return t("providers.description.custom");
   const oauth = provider.methods.some((method) => method.type === "oauth");
   const apiKey = provider.methods.some((method) => method.type === "api_key");
   if (oauth && apiKey) return t("providers.description.oauthOrKey");

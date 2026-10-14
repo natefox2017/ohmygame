@@ -33,6 +33,8 @@ jobs:
           set -euo pipefail
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          # Self-hosted runners reuse Git worktrees; discard a stale remote.
+          git remote remove upstream 2>/dev/null || true
           git remote add upstream https://github.com/WhiteTowerAI/ohmygame.git
           git fetch --no-tags upstream main
           actual="$(git rev-parse upstream/main)"

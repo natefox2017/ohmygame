@@ -26,7 +26,7 @@ jobs:
         with:
           ref: chore/upstream-beta-4-7-review
           fetch-depth: 0
-          persist-credentials: false
+          persist-credentials: true
       - name: Create a reviewable two-parent integration commit
         shell: bash
         run: |
@@ -60,11 +60,10 @@ jobs:
 
       - name: Publish review branch only
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          gh auth setup-git
+          # Checkout's job-scoped GitHub token is sufficient; self-hosted runners
+          # are not required to install the optional gh CLI.
           git push origin HEAD:refs/heads/chore/upstream-beta-4-7-review
 
       - uses: actions/setup-node@v4

@@ -8,7 +8,7 @@ import {
 import { hyper3DCredits } from "./cloud-models.js";
 import { knownImageReferenceLimit } from "./image-reference-limits.js";
 
-export const MODEL_USAGE_LABELS: Record<ProviderCapability, string> = { language: "Language", image: "Image", video: "Video", "3d": "3D" };
+export const MODEL_USAGE_LABELS: Record<ProviderCapability, string> = { language: "Language", image: "Image", video: "Video", "3d": "3D", audio: "Audio" };
 /** The Codex protocol is internal and cannot be configured as a generic custom API endpoint. */
 export const IMAGE_PROTOCOL_LABELS: Record<Exclude<ImageProtocol, "codex-app-server">, string> = {
   "openai-images": "OpenAI Images", "gemini-generate-content": "Gemini Generate Content",

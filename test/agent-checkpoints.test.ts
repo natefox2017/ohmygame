@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ProjectState } from "../src/shared/contracts.js";
 import { AgentCheckpoints } from "../src/daemon/agent-checkpoints.js";
-import { CheckpointConflictError } from "../src/daemon/checkpoints.js";
+import { CheckpointConflictError, CheckpointStore } from "../src/daemon/checkpoints.js";
 import { readCommitTree, readTree } from "../src/daemon/checkpoint-objects.js";
 
 const roots: string[] = [];
@@ -121,6 +121,32 @@ describe("AgentCheckpoints", () => {
     expect(await readFile(file, "utf8")).toBe("revision 20\n");
     await new AgentCheckpoints().restore(project, undone.previous);
     expect(await readFile(file, "utf8")).toBe("revision 21\n");
+  });
+
+  it("preserves Pi session snapshot objects while trimming legacy recovery history", async () => {
+    const { project, file } = await fixture();
+    const store = new CheckpointStore();
+    const legacy = new AgentCheckpoints(store);
+    // Create the legacy index first: an existing Git checkpoint without a
+    // ledger is intentionally treated as unrecoverable history.
+    await legacy.before(project, "chat", "initial");
+    await legacy.after(project, "initial");
+    const modern = await store.snapshot(project);
+    const dir = path.join(project.storagePath!, "session");
+    await mkdir(dir, { recursive: true });
+    await writeFile(path.join(dir, "chat.jsonl"), JSON.stringify({
+      type: "custom", customType: "ohmygame-checkpoint",
+      data: { version: 1, commit: modern },
+    }) + "\n");
+    for (let index = 0; index < 22; index += 1) {
+      const id = `turn-${index}`;
+      await legacy.before(project, "chat", id);
+      await writeFile(file, `revision ${index}\n`);
+      await legacy.after(project, id);
+    }
+    expect((await legacy.list(project)).turns).toHaveLength(20);
+    const retained = await store.read(project, modern, "game.txt");
+    expect(Buffer.from(retained!).toString("utf8")).toBe("version one\n");
   });
 
   it("fails closed when the quota cannot fit a full checkpoint", async () => {

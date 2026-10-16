@@ -1,3 +1,4 @@
+import { workspaceVersion } from "./workspace-version.js";
 import { useCanvasTables } from "./use-canvas-tables.js";
 import { Equal } from "typebox/value";
 import { CanvasTableConflictNotice, ExpandedCanvasTable, type CanvasTables } from "./canvas-table-node.js";
@@ -48,6 +49,7 @@ export function CanvasWorkspace({ project, headerActionsTarget = null, onLeaveRe
   onToggleChat?: () => void;
   onProjectUpdated?: (project: ProjectState) => void;
 }) {
+  const [writeVersion] = useState(() => workspaceVersion(project.id));
   const singleBoard = project.type === "asset-canvas";
   const docs = useCanvasDocuments(project.id), workspace = docs.workspace;
   const tableStorage = useCanvasTables(project.id, workspace);
@@ -204,7 +206,7 @@ export function CanvasWorkspace({ project, headerActionsTarget = null, onLeaveRe
     {singleBoard && workspaceView === "code" ? <WorkspaceCodeView projectId={project.id} revision={workspaceRevision + codeRevision} openFileRequest={openFileRequest} /> : null}
     {boardOptions && workspace && optionsBoard ? <CanvasContextMenu screenPosition={boardOptions} label={t("canvas.boardOptions", { name: optionsBoard.name })} onClose={() => setBoardOptions(undefined)}>
       <button type="button" role="menuitem" onClick={() => { setBoardOptions(undefined); setName(optionsBoard.name); setDialog({ type: "rename", id: optionsBoard.id }); }}><Pencil size={14} /><span>{t("common.rename")}</span></button>
-      {([-1, 1] as const).map((direction) => <button type="button" role="menuitem" key={direction} disabled={workspace.boards.findIndex((board) => board.id === optionsBoard.id) === (direction === -1 ? 0 : workspace.boards.length - 1)} onClick={() => { setBoardOptions(undefined); void run(async () => { await flush(); await changeCanvasBoard(project.id, optionsBoard.id, { direction }); await docsRef.current.refresh(); }); }}>{direction === -1 ? <ChevronLeft size={14} /> : <ChevronRight size={14} />}<span>{direction === -1 ? t("canvas.moveUp") : t("canvas.moveDown")}</span></button>)}
+      {([-1, 1] as const).map((direction) => <button type="button" role="menuitem" key={direction} disabled={workspace.boards.findIndex((board) => board.id === optionsBoard.id) === (direction === -1 ? 0 : workspace.boards.length - 1)} onClick={() => { setBoardOptions(undefined); void run(async () => { await flush(); await changeCanvasBoard(project.id, optionsBoard.id, { direction }, writeVersion); await docsRef.current.refresh(); }); }}>{direction === -1 ? <ChevronLeft size={14} /> : <ChevronRight size={14} />}<span>{direction === -1 ? t("canvas.moveUp") : t("canvas.moveDown")}</span></button>)}
       <button type="button" role="menuitem" disabled={workspace.boards.length === 1} onClick={() => { setBoardOptions(undefined); setDialog({ type: "delete", id: optionsBoard.id }); }}><Trash2 size={14} /><span>{t("canvas.deleteBoard")}</span></button>
     </CanvasContextMenu> : null}
     {expandedTable && tableStorage.sessions.get(expandedTable.id) && workspaceView !== "code" ? <div className="design-expanded-document canvas-expanded-table" role="dialog" aria-modal="true" aria-label={t("canvas.expandedTable")}>
@@ -215,9 +217,9 @@ export function CanvasWorkspace({ project, headerActionsTarget = null, onLeaveRe
       <form onSubmit={(event) => { event.preventDefault(); void run(async () => {
         await flush();
         let createdId: string | undefined;
-        if (dialog.type === "create") { const next = await createCanvasBoard(project.id, name.trim()); createdId = next.boards.at(-1)!.id; }
-        else if (dialog.type === "rename") await changeCanvasBoard(project.id, dialog.id!, { name: name.trim() });
-        else await deleteCanvasBoard(project.id, dialog.id!);
+        if (dialog.type === "create") { const next = await createCanvasBoard(project.id, name.trim(), writeVersion); createdId = next.boards.at(-1)!.id; }
+        else if (dialog.type === "rename") await changeCanvasBoard(project.id, dialog.id!, { name: name.trim() }, writeVersion);
+        else await deleteCanvasBoard(project.id, dialog.id!, writeVersion);
         await docsRef.current.refresh();
         if (createdId) setActiveId(createdId);
         setDialog(undefined);

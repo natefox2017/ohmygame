@@ -2,7 +2,7 @@ import { copyFile, link, lstat, mkdir, readFile, readdir, rename, rm, statfs, wr
 import path from "node:path";
 import type { ProjectState } from "../shared/contracts.js";
 import { checkpointDirectory } from "./checkpoints.js";
-import { initialize, readCommitTree, readHead, readTree, verifyBlob, writeCommit, writeHead, TREE_MODE } from "./checkpoint-objects.js";
+import { initialize, readCommit, readCommitTree, readHead, readTree, verifyBlob, writeAtomically, writeCommit, writeHead, TREE_MODE } from "./checkpoint-objects.js";
 import type { AgentCheckpointTurn } from "./agent-checkpoints.js";
 
 export const CHECKPOINT_MAX_BYTES = 5 * 1024 * 1024 * 1024;
@@ -147,6 +147,22 @@ export async function assertCheckpointCapacity(
   }
 }
 
+/** Pi session checkpoints pin Git object IDs independently of the legacy ledger.
+ * Once a persisted conversation exists, rotating only the legacy store could
+ * permanently orphan the modern Undo/Reapply history. Keep all objects until
+ * both indexes can be compacted together; the per-project size limit still
+ * rejects new Agent turns before writing when there is insufficient capacity.
+ */
+export async function hasPersistentConversations(project: Pick<ProjectState, "workspacePath" | "storagePath">): Promise<boolean> {
+  const directory = path.join(project.storagePath ?? path.dirname(project.workspacePath), "session");
+  try {
+    return (await readdir(directory)).some((name) => name.endsWith(".jsonl"));
+  } catch (cause) {
+    if ((cause as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw cause;
+  }
+}
+
 /** Copy only the trees and validated blobs needed by retained snapshots. */
 async function copyTreeObjects(source: string, target: string, tree: string, copied: Set<string>): Promise<void> {
   if (copied.has(tree)) return;
@@ -190,6 +206,12 @@ export async function compactCheckpointHistory(
   const { active, next, previous } = rotationPaths(project);
   const keptTurns = ledger.turns.slice(-Math.max(1, keepTurns));
   const keptRecoveries = ledger.recoveries.slice(-1);
+  if (await hasPersistentConversations(project)) {
+    // Only prune legacy navigation metadata; never rewrite Pi checkpoint IDs.
+    const updated: CheckpointLedger = { version: 1, turns: keptTurns, recoveries: keptRecoveries };
+    await writeAtomically(active, path.join(active, "agent-turns.json"), JSON.stringify(updated, null, 2) + "\n");
+    return updated;
+  }
   const head = await readHead(active);
   const ids = [...new Set([
     ...keptTurns.flatMap((entry) => [entry.before, ...(entry.after ? [entry.after] : [])]),
@@ -204,9 +226,11 @@ export async function compactCheckpointHistory(
   try {
     await initialize(next);
     for (const id of ids) {
-      const tree = await readCommitTree(active, id);
+      const { tree, unreadable } = await readCommit(active, id);
       await copyTreeObjects(active, next, tree, copied);
-      const nextCommit = await writeCommit(next, tree, parent);
+      // Retain the unreadable-file scope. Losing this metadata could make an
+      // omitted private file look like a deletion during a future restore.
+      const nextCommit = await writeCommit(next, tree, parent, unreadable);
       remapped.set(id, nextCommit);
       parent = nextCommit;
     }

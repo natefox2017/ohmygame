@@ -55,6 +55,7 @@ import { ErrorBoundary } from "./error-boundary.js";
 import { useRuntimeConnection } from "./runtime-connection.js";
 import { DesktopGamePreview } from "./desktop-game-preview.js";
 import { t } from "./i18n.js";
+import { GitChangesList, useWorkspaceGitChanges, WorkspaceGitDiff } from "./workspace-git-changes.js";
 import { WorkspaceBackButton } from "./workspace-shell.js";
 
 type WorkspaceTab = "preview" | "code" | "assets";
@@ -423,6 +424,8 @@ export function CodingWorkspace({
           onSelect={selectFile}
           projectId={project?.id}
           revision={workspaceRevision}
+          filesRevision={filesRevision}
+          openFileRequestId={openFileRequest?.id}
           onFilesChanged={(change) => {
             fileRequest.current += 1;
             setSelectedCodePath((current) => workspacePathAfterChange(current, change));
@@ -874,6 +877,8 @@ export function WorkspaceFileBrowser({
   onOpenExternal,
   projectId,
   revision = 0,
+  filesRevision = 0,
+  openFileRequestId,
   onFilesChanged = () => {},
   fileActions,
   renderFile,
@@ -887,11 +892,23 @@ export function WorkspaceFileBrowser({
   onOpenExternal?: (path: string, mode: ProjectFileOpenMode) => Promise<void>;
   projectId?: string;
   revision?: number;
+  filesRevision?: number;
+  openFileRequestId?: number;
   onFilesChanged?: (change: WorkspaceFileChange) => void;
   fileActions?: ReactNode;
   renderFile?: (file: WorkspaceFileContent) => ReactNode;
 }) {
   const [searchTerm, setSearchTerm] = useState("");
+  const [browserView, setBrowserView] = useState<"files" | "changes">("files");
+  const [selectedGitPath, setSelectedGitPath] = useState<string>();
+  const git = useWorkspaceGitChanges(projectId, revision, filesRevision);
+  const showChanges = browserView === "changes" && git.data?.available;
+  useEffect(() => { setBrowserView("files"); }, [projectId, openFileRequestId]);
+  useEffect(() => {
+    if (!git.data?.available) return;
+    const items = git.data.changes;
+    setSelectedGitPath((current) => items.some((item) => item.path === current) ? current : items[0]?.path);
+  }, [git.data]);
   const tree = useMemo(() => workspaceFileTree(files), [files]);
   const selectedEntry = selectedPath ? files.find((file) => file.path === selectedPath && !file.directory) : undefined;
   const selectedMedia = selectedEntry && hasMediaType(selectedEntry) ? selectedEntry : undefined;
@@ -953,6 +970,18 @@ export function WorkspaceFileBrowser({
   return <>
     <div className="code-view" ref={codeElement} style={{ "--file-explorer-width": `${explorerWidth}px` } as CSSProperties}>
       <div className="file-explorer">
+        {git.data?.available || git.error ? <div className="file-explorer-views">
+          {git.data?.available ? <nav aria-label={t("workspace.gitViews")}>
+            <button type="button" aria-pressed={!showChanges} onClick={() => setBrowserView("files")}>{t("workspace.gitFiles")}</button>
+            <button type="button" aria-pressed={Boolean(showChanges)} onClick={() => { setBrowserView("changes"); git.refresh(); }}>
+              {t("workspace.gitChanges")}<span className="git-change-count">{git.data.changes.length}</span>
+            </button>
+          </nav> : <span className="git-changes-note" role="alert">{t("workspace.gitFailed")}</span>}
+          <button type="button" className="icon-button" disabled={git.loading} onClick={git.refresh}
+            title={t("workspace.gitRefresh")} aria-label={t("workspace.gitRefresh")}>
+            <RefreshCw size={12} className={git.loading ? "spin" : undefined} />
+          </button>
+        </div> : null}
         <label className="file-filter">
           <Search size={13} aria-hidden="true" />
           <input
@@ -964,7 +993,8 @@ export function WorkspaceFileBrowser({
           />
         </label>
         {actionError ? <p className="file-action-error" role="alert">{actionError}</p> : null}
-        <div className="file-tree" ref={setTreeElement} onContextMenu={(event) => {
+        {showChanges ? <GitChangesList data={git.data} loading={git.loading} error={git.error} search={searchTerm}
+          selectedPath={selectedGitPath} onSelect={setSelectedGitPath} /> : <div className="file-tree" ref={setTreeElement} onContextMenu={(event) => {
           event.preventDefault();
           if (projectId && !busy) setContextMenu({ path: "", directory: true, x: event.clientX, y: event.clientY });
         }}>
@@ -1004,7 +1034,7 @@ export function WorkspaceFileBrowser({
               } : undefined} />}
             </Tree>
           ) : null}
-        </div>
+        </div>}
       </div>
       <div
         className="file-explorer-resizer"
@@ -1032,7 +1062,8 @@ export function WorkspaceFileBrowser({
         onLostPointerCapture={finishExplorerResize}
       />
       <div className="file-content">
-        {error ? <WorkspaceState error={error} /> : loading ? <WorkspaceState loading label={t("workspace.loadingFile")} /> : selectedFile ? (
+        {showChanges && projectId ? <WorkspaceGitDiff key={`${projectId}:${selectedGitPath}`} projectId={projectId} path={selectedGitPath} changes={git.data} />
+          : error ? <WorkspaceState error={error} /> : loading ? <WorkspaceState loading label={t("workspace.loadingFile")} /> : selectedFile ? (
           <>
             <div className="file-content-header">
               <span className="file-content-path" title={selectedFile.path}>{selectedFile.path}{selectedFile.truncated ? " (truncated)" : ""}</span>
@@ -1134,6 +1165,8 @@ export function WorkspaceCodeView({ projectId, revision, openFileRequest }: { pr
     onSelect={(path) => void selectFile(path)}
     projectId={projectId}
     revision={revision}
+    filesRevision={filesRevision}
+    openFileRequestId={openFileRequest?.id}
     onFilesChanged={(change) => {
       request.current += 1;
       setSelectedPath((current) => workspacePathAfterChange(current, change));

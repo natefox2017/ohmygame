@@ -569,7 +569,8 @@ export function createApp(options: AppOptions = {}) {
   const configuredCheckpointMiB = Number(process.env.OHMYGAME_CHECKPOINT_MAX_MIB);
   const checkpointBytes = Number.isSafeInteger(configuredCheckpointMiB) && configuredCheckpointMiB >= 128 && configuredCheckpointMiB <= 50_000
     ? configuredCheckpointMiB * 1024 * 1024 : undefined;
-  const checkpoints = new AgentCheckpoints(undefined, checkpointBytes);
+  const checkpoints = new CheckpointStore();
+  const legacyCheckpoints = new AgentCheckpoints(checkpoints, checkpointBytes);
   const restoringProjects = new Set<string>();
   const agentPlaytests = new Map<string, OwnedPlaytestDriver>();
   const publishing = new Set<string>();
@@ -584,7 +585,6 @@ export function createApp(options: AppOptions = {}) {
     fetch: options.publishFetch,
   });
   const previews = new PreviewManager(events);
-  const checkpoints = new CheckpointStore();
   const projectWrites = new ProjectWrites();
   const webSearchSettings = new WebSearchSettingsStore(dataDirectory);
   const onboarding = new OnboardingStore(dataDirectory);
@@ -843,10 +843,10 @@ export function createApp(options: AppOptions = {}) {
     ...(options.createSession ? {} : {
       onBeforeRun: async (project: ProjectState, conversationId: string, turnId: string) => {
         if (restoringProjects.has(project.id)) throw new Error("Workspace restoration is in progress");
-        await checkpoints.before(project, conversationId, turnId);
+        await legacyCheckpoints.before(project, conversationId, turnId);
       },
       onAfterRun: async (project: ProjectState, _conversationId: string, turnId: string) => {
-        try { await checkpoints.after(project, turnId); }
+        try { await legacyCheckpoints.after(project, turnId); }
         catch (cause) { app.log.error({ err: cause, projectId: project.id, turnId }, "Could not finalize Agent checkpoint"); }
       },
     }),
@@ -1597,7 +1597,7 @@ export function createApp(options: AppOptions = {}) {
   app.get<{ Params: { projectId: string } }>("/projects/:projectId/checkpoints", async (request, reply) => {
     const project = projects.get(request.params.projectId);
     if (!project) return reply.code(404).send({ error: "Project not found" });
-    try { return await checkpoints.list(project); }
+    try { return await legacyCheckpoints.list(project); }
     catch (cause) { return reply.code(500).send({ error: cause instanceof Error ? cause.message : String(cause) }); }
   });
 
@@ -1605,12 +1605,12 @@ export function createApp(options: AppOptions = {}) {
     if (agents.isProjectBusy(project.id) || restoringProjects.has(project.id)
       || (activeProjectWrites.get(project.id) ?? 0) > 0
       || tools.jobs().some((job) => job.status === "running" && job.context?.projectId === project.id)) {
-      throw new CheckpointConflictError(["An Agent, generation job or workspace edit is still active"]);
+      throw new CheckpointConflictError(["An Agent, generation job or workspace edit is still active"], ["An Agent, generation job or workspace edit is still active"]);
     }
     // The project might be open in a different window. Do not restore while an
     // editor lease can still flush a stale buffer over the recovered files.
     if (previews.hasActiveEditor(project)) {
-      throw new CheckpointConflictError(["Close the open project editor before restoring a version"]);
+      throw new CheckpointConflictError(["Close the open project editor before restoring a version"], ["Close the open project editor before restoring a version"]);
     }
     restoringProjects.add(project.id);
     let incomplete = false;
@@ -1638,7 +1638,7 @@ export function createApp(options: AppOptions = {}) {
       const project = projects.get(request.params.projectId);
       if (!project) return reply.code(404).send({ error: "Project not found" });
       if (request.body?.confirm !== true || typeof request.body.turnId !== "string" || !request.body.turnId) return reply.code(400).send({ error: "Explicit confirmation and turnId are required" });
-      try { return await withCheckpointRestore(project, () => checkpoints.undo(project, request.body.turnId)); }
+      try { return await withCheckpointRestore(project, () => legacyCheckpoints.undo(project, request.body.turnId)); }
       catch (cause) { return reply.code(cause instanceof CheckpointConflictError || /finish|not found|Recover/i.test(String(cause)) ? 409 : 500).send({ error: cause instanceof Error ? cause.message : String(cause) }); }
     },
   );
@@ -1648,7 +1648,7 @@ export function createApp(options: AppOptions = {}) {
       const project = projects.get(request.params.projectId);
       if (!project) return reply.code(404).send({ error: "Project not found" });
       if (request.body?.confirm !== true || typeof request.body.commit !== "string") return reply.code(400).send({ error: "Explicit confirmation and checkpoint ID are required" });
-      try { return await withCheckpointRestore(project, () => checkpoints.restore(project, request.body.commit)); }
+      try { return await withCheckpointRestore(project, () => legacyCheckpoints.restore(project, request.body.commit)); }
       catch (cause) { return reply.code(cause instanceof CheckpointConflictError || /finish|not recorded|Invalid checkpoint/i.test(String(cause)) ? 409 : 500).send({ error: cause instanceof Error ? cause.message : String(cause) }); }
     },
   );
@@ -2197,7 +2197,8 @@ export function createApp(options: AppOptions = {}) {
       methods: [{ type: "oauth" as const, label: "ChatGPT sign-in via Codex CLI" }],
       capabilities: ["image"] as const, custom: false,
     };
-    return [...providers, ...directProviders, codexProvider, ...await cloudModels.providers(providerEnabled)].sort((left, right) => left.name.localeCompare(right.name));
+    void cloudModels.refresh();
+    return [...providers, ...directProviders, codexProvider, ...cloudModels.providersSnapshot(providerEnabled)].sort((left, right) => left.name.localeCompare(right.name));
   };
   app.get("/settings/providers", providerSummaries);
   // Upstream's independent OpenAI Images connection must coexist with our

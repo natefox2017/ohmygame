@@ -1,0 +1,63 @@
+# Temporary branch-only upstream review helper; remove before the merge PR.
+name: Stage upstream beta.4.9 sync
+
+on:
+  push:
+    branches:
+      - chore/upstream-beta-4-9-sync
+    paths:
+      - .github/workflows/stage-upstream-beta-4-9.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: upstream-beta-4-9-stage
+  cancel-in-progress: false
+
+jobs:
+  stage:
+    runs-on: [self-hosted, linux, x64, grok-box]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: chore/upstream-beta-4-9-sync
+          fetch-depth: 0
+          persist-credentials: true
+      - name: Stage the pinned upstream merge for review, never write main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git remote remove upstream 2>/dev/null || true
+          git remote add upstream https://github.com/WhiteTowerAI/ohmygame.git
+          git fetch --no-tags upstream main
+          test "$(git rev-parse upstream/main)" = "313281f2d6b24e209591c0cdbc7faca6131cec06" || { echo 'Upstream moved: review and re-pin'; exit 1; }
+          git merge-base HEAD upstream/main >/dev/null
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          # On this isolated review branch prefer fork content where the old
+          # fork and new upstream overlap. Each such file needs review before PR merge.
+          git merge --no-ff --no-commit -X ours upstream/main
+          if git ls-files -u | grep -q .; then
+            echo 'Unresolved content conflicts: refusing to publish staging branch'
+            exit 1
+          fi
+          # Preserve downstream workflows verbatim; never stage upstream CI,
+          # automatic release activation, or packaging changes.
+          git restore --source=HEAD --staged --worktree -- .github/workflows/
+          if ! git diff --cached --quiet HEAD -- .github/workflows/; then
+            echo 'Refusing to push modified workflows' >&2
+            exit 1
+          fi
+          grep -q '^  workflow_dispatch:' .github/workflows/release-desktop.yml
+          if grep -q '^[[:space:]]*tags:' .github/workflows/release-desktop.yml; then
+            echo 'Desktop release must remain disabled' >&2
+            exit 1
+          fi
+          test "$(grep -c 'if: \$\{\{ false \}\}' .github/workflows/release-desktop.yml)" -ge 2
+          grep -q 'codex-app-server' src/renderer/models-settings.tsx
+          git commit -m "chore(sync): stage upstream beta.4.9 for conflict review"
+          git merge-base --is-ancestor upstream/main HEAD
+          git show --stat --oneline --summary HEAD | tail -45
+          git push origin HEAD:refs/heads/chore/upstream-beta-4-9-sync

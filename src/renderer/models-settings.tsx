@@ -53,7 +53,6 @@ export type ModelsView = { page: "providers" } | { page: "provider"; provider: P
 
 const CODEX_IMAGE_PROVIDER = "codex-app-server";
 const CODEX_IMAGE_MODEL_ID = "gpt-image-2";
-const POPULAR_PROVIDER_IDS = ["openrouter", "openai", CODEX_IMAGE_PROVIDER, "anthropic", "meshy", "tripo"];
 const SEEDANCE_PROVIDER_IDS = new Set(["volcengine-ark", "byteplus-modelark"]);
 const MINIMAX_PROVIDER_IDS = new Set(["minimax-video-cn", "minimax-video-global"]);
 const PROVIDER_CAPABILITY_FILTERS: Array<{ value: "all" | ProviderCapability; label: string }> = [

@@ -1425,8 +1425,28 @@ export class AgentManager {
     active.ended = true;
     await this.#withQueueMutation(key, async () => {
       if (this.#activeTurns.get(key) !== active) return;
-      await this.options.onAfterRun?.(project, active.conversationId, active.turnId);
-      await this.options.onRunFinished?.(project, active.conversationId);
+      // The original fork's legacy snapshot callback must not replace the
+      // upstream turn-closing transaction: that loses Pi checkpoint endings,
+      // undo state, and session branch history.
+      if (active.left) {
+        try {
+          const sessionManager = this.#sessions.get(key)?.session.sessionManager;
+          if (sessionManager) carryTurnEnds(sessionManager, active.left, true);
+        } catch {
+          console.warn("Could not preserve earlier turn checkpoints");
+        }
+        active.left = undefined;
+      }
+      // Keep the turn active until the modern checkpoint end is persisted.
+      const ends = await this.#turnEnds(project, active);
+      this.#recordTurnEnds(projectId, active, ends);
+      // Save the legacy UI's separate index only after Pi's snapshot is closed.
+      // A legacy bookkeeping failure must not strand the Agent in a busy state.
+      try {
+        await this.options.onAfterRun?.(project, active.conversationId, active.turnId);
+      } catch (cause) {
+        console.warn("Could not finish the legacy checkpoint record", cause);
+      }
       this.#activeTurns.delete(key);
       const questionnaire = this.#questionnaires.get(key);
       if (questionnaire) {

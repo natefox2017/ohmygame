@@ -2224,6 +2224,16 @@ export function createApp(options: AppOptions = {}) {
         capabilities: ["video"] as const,
       };
     })];
+    const speechSettings = volcengineTtsSettings.get();
+    const speechProvider = {
+      id: "volcengine-tts", name: "Doubao Speech",
+      configured: speechSettings.configured, enabled: providerEnabled("volcengine-tts"),
+      custom: false,
+      status: speechSettings.configured ? "connected" as const : "not_configured" as const,
+      methods: [{ type: "api_key" as const, label: "Doubao Speech API key" }],
+      credentialType: "api_key" as const,
+      capabilities: ["audio"] as const,
+    };
     const codexConnection = await codexImages.connection();
     const codexProvider = {
       id: "codex-app-server", name: "Codex · ChatGPT Images",
@@ -2234,7 +2244,7 @@ export function createApp(options: AppOptions = {}) {
       capabilities: ["image"] as const, custom: false,
     };
     void cloudModels.refresh();
-    return [...providers, ...directProviders, codexProvider, ...cloudModels.providersSnapshot(providerEnabled)].sort((left, right) => left.name.localeCompare(right.name));
+    return [...providers, ...directProviders, speechProvider, codexProvider, ...cloudModels.providersSnapshot(providerEnabled)].sort((left, right) => left.name.localeCompare(right.name));
   };
   app.get("/settings/providers", providerSummaries);
   // Upstream's independent OpenAI Images connection must coexist with our

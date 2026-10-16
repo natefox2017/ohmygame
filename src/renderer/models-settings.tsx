@@ -904,6 +904,7 @@ function ConnectedProvider({ provider, onBack, onRemoved }: { provider: Provider
       {notice ? <p className="settings-success" role="status">{notice}</p> : null}
       {chatConnected ? <ProviderModels key={modelsRevision} providerId={provider.id} /> : null}
       {provider.id === "openai" ? <OpenAIImageModels revision={modelsRevision} disabled={deletion.busy || Boolean(editing)} onChanged={setImageConnected} /> : provider.capabilities.includes("image") ? <ProviderImageModels key={`images-${modelsRevision}`} providerId={provider.id} /> : null}
+      {provider.id === "openai" && credentialType === "oauth" ? <p className="settings-detail-hint">{t("providers.codex.openAiOAuthHint")}</p> : null}
       {showsEndpoint || showsTransport ? <ProviderAdvanced>
         {showsEndpoint ? <section aria-label={t("providers.baseUrlSettings")}>
           <div className="settings-provider-setting-row">
@@ -921,7 +922,6 @@ function ConnectedProvider({ provider, onBack, onRemoved }: { provider: Provider
         </section> : null}
         {showsTransport ? <ProviderResponsesTransport providerId={provider.id} disabled={deletion.busy || Boolean(editing)} /> : null}
       </ProviderAdvanced> : null}
-      {provider.id === "openai" && credentialType === "oauth" ? <p className="settings-detail-hint">{t("providers.codex.openAiOAuthHint")}</p> : null}
       {displayedProvider.configured ? <ProviderRemoveSection provider={{ ...displayedProvider, credentialType: chatConnected ? credentialType : undefined }} deletion={deletion} disabled={Boolean(editing) || endpoint.saving} /> : null}
     </section>
   );

@@ -434,7 +434,9 @@ it("bounds dependency installation and leaves cancelled installs retryable", asy
     path.join(directory, "install.mjs"),
     "import {writeFileSync} from 'node:fs';writeFileSync('installer.pid',String(process.pid));console.log('Installing fixture');setInterval(()=>{},1000);",
   );
-  const preview = manager({ installTimeoutMs: 2_000 });
+  // Give the package manager's postinstall hook time to start and flush its
+  // output even on a busy parallel CI runner; the install must still time out.
+  const preview = manager({ installTimeoutMs: 8_000 });
   const pending = preview.start(project);
   const rejected = expect(pending).rejects.toThrow("installation timed out");
   await vi.waitFor(() => expect(project.preview.phase).toBe("installing"));

@@ -419,6 +419,7 @@ export function CanvasBoardEditor({ project, initialNodeId, onInitialNodeHandled
   const historyPendingBase = useRef<AssetCanvasDocument | undefined>(undefined);
   const historyTimer = useRef<number | undefined>(undefined);
   const historyGestureBase = useRef<AssetCanvasDocument | undefined>(undefined);
+  const altDragCopies = useRef<ReadonlyMap<string, string> | undefined>(undefined);
   const [, setHistoryRevision] = useState(0);
   const selectedNodes = nodes.filter((node) => node.selected);
   const selectedNodeIdsJson = JSON.stringify(selectedNodes.map((node) => node.id));
@@ -693,6 +694,7 @@ export function CanvasBoardEditor({ project, initialNodeId, onInitialNodeHandled
       const step = undoShortcut(event);
       if (!step) return;
       event.preventDefault();
+      if (historyGestureBase.current) return;
       if (step === "redo") redoEditorChange();
       else undoEditorChange();
     };
@@ -876,7 +878,13 @@ export function CanvasBoardEditor({ project, initialNodeId, onInitialNodeHandled
   }, [save, phase]);
 
   const onNodesChange = useCallback((changes: NodeChange<AssetCanvasFlowNode>[]) => {
-    setNodes((current) => applyNodeChanges(changes, current));
+    const copies = altDragCopies.current;
+    const moves = copies ? changes.flatMap<NodeChange<AssetCanvasFlowNode>>((change) => {
+      if (change.type !== "position") return [change];
+      const id = copies.get(change.id);
+      return id ? [{ ...change, id }] : [];
+    }) : changes;
+    setNodes((current) => applyNodeChanges(moves, current));
   }, []);
   function onEdgesChange(changes: EdgeChange[]): void {
     const assetEdgeIds = new Set(assetEdges.map((edge) => edge.id));
@@ -1070,6 +1078,32 @@ export function CanvasBoardEditor({ project, initialNodeId, onInitialNodeHandled
     setSelectedAssetEdgeId(undefined);
   }
 
+  function startAltDragDuplicate(dragged: readonly AssetCanvasFlowNode[]): void {
+    // A rejected copy gesture must not fall back to moving the originals.
+    altDragCopies.current = new Map();
+    if (nodesRef.current.length + dragged.length > MAX_ASSET_CANVAS_NODES) { setTransferError(t("assetCanvas.nodeLimit")); return; }
+    setTransferError(undefined);
+    const copies = dragged.map((node) => {
+      const source = toAssetCanvasNode(node, model3DModels);
+      return { ...toFlowNode(duplicateAssetCanvasNode(source, source.position), imageModels, videoModels), selected: true };
+    });
+    altDragCopies.current = new Map(dragged.map((node, index) => [node.id, copies[index]!.id]));
+    clearSelection();
+    setNodes((current) => [...current, ...copies]);
+    setMarqueeSelectedIds(new Set(altDragCopies.current.values()));
+  }
+
+  function finishAltDragDuplicate(dragged: readonly AssetCanvasFlowNode[]): void {
+    const copies = altDragCopies.current;
+    altDragCopies.current = undefined;
+    if (!copies?.size) return;
+    const start = new Map(nodesRef.current.map((node) => [node.id, node.position]));
+    if (dragged.some((node) => node.position.x !== start.get(node.id)?.x || node.position.y !== start.get(node.id)?.y)) return;
+    const copyIds = new Set(copies.values());
+    setNodes((current) => current.flatMap((node) => copyIds.has(node.id) ? [] : [copies.has(node.id) ? { ...node, selected: true } : node]));
+    setMarqueeSelectedIds(new Set(copies.keys()));
+  }
+
   function copySelection(event: ClipboardEvent<HTMLDivElement>, cut = false): void {
     if (isTextEntry(event.target) || eventWithin(event, ".nokey")) return;
     const selected = nodes.filter((node) => node.selected).map((node) => toAssetCanvasNode(node, model3DModels));
@@ -1153,6 +1187,7 @@ export function CanvasBoardEditor({ project, initialNodeId, onInitialNodeHandled
   function clearSelection(): void {
     setSelectedAssetEdgeId(undefined);
     setNodes((current) => current.map((node) => node.selected ? { ...node, selected: false } : node));
+    setEdges((current) => current.map((edge) => edge.selected ? { ...edge, selected: false } : edge));
   }
 
   function activateNode(nodeId: string): void {
@@ -1561,8 +1596,12 @@ export function CanvasBoardEditor({ project, initialNodeId, onInitialNodeHandled
               addOnDoubleClick
               deleteKeyCode={["Backspace", "Delete"]}
               onNodesChange={onNodesChange}
-              onNodeDragStart={() => { setCanvasContextMenu(undefined); beginHistoryGesture(); }}
-              onNodeDragStop={finishHistoryGesture}
+              onNodeDragStart={(event, _node, dragged) => {
+                setCanvasContextMenu(undefined); beginHistoryGesture();
+                altDragCopies.current = undefined;
+                if (event.altKey) startAltDragDuplicate(dragged);
+              }}
+              onNodeDragStop={(_event, _node, dragged) => { finishAltDragDuplicate(dragged); finishHistoryGesture(); }}
               onMoveStart={() => setCanvasContextMenu(undefined)}
               onEdgesChange={onEdgesChange}
               onConnect={onConnect}
@@ -1586,6 +1625,7 @@ export function CanvasBoardEditor({ project, initialNodeId, onInitialNodeHandled
               }}
               onNodesDelete={(deleted) => {
                 removeCanvasNodes(new Set(deleted.map((node) => node.id)));
+                finishHistoryGesture();
               }}
               isValidConnection={(connection) => {
                 const target = nodes.find((node) => node.id === connection.target);

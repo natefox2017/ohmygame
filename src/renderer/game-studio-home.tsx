@@ -148,7 +148,7 @@ export function GameStudioHome({
                 {t("common.retry")}
               </button>
             ) : (
-              <a className="studio-text-link" href={projectsHash(projectType)}>
+              <a className="studio-text-link" href={projectsHash({ projectType })}>
                 {t("common.viewAll")}
               </a>
             )}

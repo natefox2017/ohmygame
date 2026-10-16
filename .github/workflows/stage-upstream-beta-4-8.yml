@@ -36,7 +36,12 @@ jobs:
           test "$(git merge-base HEAD upstream/main)" != ""
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git merge --no-ff --no-edit -X ours upstream/main
+          git merge --no-ff --no-commit -X ours upstream/main
+          # GITHUB_TOKEN cannot push workflow updates. Keep our maintained CI
+          # and paused packaging workflow byte-for-byte on the sync branch.
+          git checkout HEAD -- .github/workflows/ci.yml .github/workflows/release-desktop.yml
+          git add .github/workflows/ci.yml .github/workflows/release-desktop.yml
+          git commit -m 'chore(sync): integrate upstream beta.4.8 while keeping fork workflows'
           # Preserve fork-specific safety controls; reject unexpected release activation.
           grep -q '^  workflow_dispatch:' .github/workflows/release-desktop.yml
           if grep -q '^[[:space:]]*tags:' .github/workflows/release-desktop.yml; then

@@ -55,7 +55,7 @@ jobs:
             echo 'Desktop release must remain disabled' >&2
             exit 1
           fi
-          test "$(grep -c 'if: \$\{\{ false \}\}' .github/workflows/release-desktop.yml)" -ge 2
+          test "$(grep -Ec "if:.*false" .github/workflows/release-desktop.yml)" -ge 2
           grep -q 'codex-app-server' src/renderer/models-settings.tsx
           git commit -m "chore(sync): stage upstream beta.4.9 for conflict review"
           git merge-base --is-ancestor upstream/main HEAD

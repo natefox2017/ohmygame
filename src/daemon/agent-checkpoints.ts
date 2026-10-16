@@ -3,7 +3,7 @@ import { lstat, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { ProjectState } from "../shared/contracts.js";
 import { CheckpointStore, checkpointDirectory, type CheckpointChange, type CheckpointRestoreResult, type CheckpointUndoResult } from "./checkpoints.js";
-import { assertCheckpointCapacity, CHECKPOINT_MAX_BYTES, CHECKPOINT_MAX_TURNS, compactCheckpointHistory, recoverCheckpointRotation, type CheckpointLedger } from "./checkpoint-maintenance.js";
+import { assertCheckpointCapacity, CHECKPOINT_MAX_BYTES, CHECKPOINT_MAX_TURNS, compactCheckpointHistory, recoverCheckpointRotation, hasPersistentConversations, type CheckpointLedger } from "./checkpoint-maintenance.js";
 
 const COMMIT_ID = /^[a-f0-9]{40}$/;
 
@@ -118,6 +118,8 @@ export class AgentCheckpoints {
       await assertCheckpointCapacity(project, this.maxBytes);
       return ledger;
     } catch (initialError) {
+      // Pruning only metadata cannot recover disk space; preserve old restore IDs.
+      if (await hasPersistentConversations(project)) throw initialError;
       for (let retain = ledger.turns.length - 1; retain >= 1; retain -= 1) {
         ledger = await compactCheckpointHistory(project, ledger, retain);
         try {

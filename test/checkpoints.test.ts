@@ -412,7 +412,7 @@ describe("workspace checkpoints", () => {
     expect(await contents(game.workspacePath)).toEqual({ ...later, "clean.ts": "one" });
 
     await store.restore(game, kept.previous);
-    const overwritten = await store.undo(game, { before, after }, { conflicts: "overwrite" });
+    const overwritten = await store.undo(game, { before, after }, { conflicts: { overwrite: ["added.ts", "edited.ts", "removed.ts"] } });
     expect(overwritten.conflicts).toEqual(["added.ts", "edited.ts", "removed.ts"]);
     expect(overwritten.changed).toEqual(["added.ts", "clean.ts", "edited.ts", "removed.ts"]);
     expect(await contents(game.workspacePath)).toEqual({ "edited.ts": "one", "removed.ts": "one", "clean.ts": "one", "by-hand.ts": "one" });
@@ -443,7 +443,8 @@ describe("workspace checkpoints", () => {
     const current = { ...later, "levels/one.json": "{}" };
 
     const refused = await store.undo(game, { before, after }).catch((error: unknown) => error);
-    expect((refused as CheckpointConflictError).conflicts).toEqual(["enemies/boss.ts", "levels"]);
+    // Show all conflicting paths, including the later files that obstruct restoration.
+    expect((refused as CheckpointConflictError).conflicts).toEqual(["enemies", "enemies/boss.ts", "levels", "levels/two.json"]);
     expect(await contents(game.workspacePath)).toEqual(current);
 
     // Keeping the conflicts still removes what the turn added and nobody changed since.
@@ -452,7 +453,7 @@ describe("workspace checkpoints", () => {
     expect(await contents(game.workspacePath)).toEqual(later);
 
     await store.restore(game, kept.previous);
-    const overwritten = await store.undo(game, { before, after }, { conflicts: "overwrite" });
+    const overwritten = await store.undo(game, { before, after }, { conflicts: { overwrite: ["enemies", "enemies/boss.ts", "levels", "levels/two.json"] } });
     expect(overwritten.changed).toEqual(["enemies", "enemies/boss.ts", "levels", "levels/one.json", "levels/two.json"]);
     expect(await contents(game.workspacePath)).toEqual(files);
     await store.restore(game, overwritten.previous);
@@ -536,7 +537,7 @@ describe("workspace checkpoints", () => {
     await mkdir(path.join(game.workspacePath, "levels/world/one"), { recursive: true });
     const current = { ...dependencies, "src/game.ts": "two" };
 
-    for (const refused of [store.restore(game, before), store.undo(game, { before, after }), store.undo(game, { before, after }, { conflicts: "overwrite" })]) {
+    for (const refused of [store.restore(game, before), store.undo(game, { before, after }), store.undo(game, { before, after }, { conflicts: { overwrite: ["tools"] } })]) {
       const error = await refused.catch((cause: unknown) => cause);
       expect(error).toBeInstanceOf(CheckpointConflictError);
       expect((error as CheckpointConflictError).conflicts).toEqual(["tools"]);
@@ -925,11 +926,12 @@ describe("workspace checkpoints", () => {
     await chmod(secret, 0o000);
     try {
       const after = await store.snapshot(game);
-      expect(await store.diff(game, before, after)).toEqual([{ path: "secret.key", kind: "removed" }, { path: "src/game.ts", kind: "modified" }]);
+      // The unreadable file is unknown, not a removal.
+      expect(await store.diff(game, before, after)).toEqual([{ path: "src/game.ts", kind: "modified" }]);
       // The file is still there, so it is in the way of the one the snapshot holds.
       const refused = await store.restore(game, before).catch((error: unknown) => error);
       expect((refused as CheckpointConflictError).conflicts).toEqual(["secret.key"]);
-      expect(await store.undo(game, { before, after }, { conflicts: "keep" })).toMatchObject({ changed: ["src/game.ts"], conflicts: ["secret.key"] });
+      expect(await store.undo(game, { before, after }, { conflicts: "keep" })).toMatchObject({ changed: ["src/game.ts"], conflicts: [] });
     } finally {
       await chmod(secret, 0o600);
     }

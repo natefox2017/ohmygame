@@ -59,12 +59,40 @@ jobs:
           fi
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          if ! git merge --no-ff --no-edit upstream/main; then
-            git status --short
+          # Stage rather than commit immediately: an Actions GITHUB_TOKEN cannot
+          # create or update workflow files without a separate workflows scope.
+          # Our fork maintains its own CI and paused release configuration.
+          if ! git merge --no-ff --no-commit upstream/main; then
+            # Resolve ONLY conflicts inside .github/workflows. All product code,
+            # docs and model configuration conflicts require manual review.
+            if ! git rev-parse --verify MERGE_HEAD >/dev/null 2>&1; then
+              echo '::error::Upstream merge failed without a merge in progress.'
+              exit 1
+            fi
+            non_workflow_conflicts="$(git diff --name-only --diff-filter=U | grep -v '^\.github/workflows/' || true)"
+            if [ -n "$non_workflow_conflicts" ]; then
+              printf 'Unresolved upstream code conflicts:\n%s\n' "$non_workflow_conflicts"
+              git merge --abort || true
+              echo '::error::Upstream merge requires code review. Main was left unchanged.'
+              exit 1
+            fi
+          fi
+          # Keep downstream workflows byte-for-byte (including existing jobs),
+          # and drop upstream-added workflow files. This avoids both permission
+          # errors and accidental release packaging changes.
+          git restore --source=HEAD --staged --worktree -- .github/workflows/
+          if ! git diff --cached --quiet HEAD -- .github/workflows/; then
             git merge --abort || true
-            echo '::error::Upstream merge has conflicts. Main was left unchanged.'
+            echo '::error::Sync unexpectedly changed protected workflow files.'
             exit 1
           fi
+          if git diff --name-only --diff-filter=U | grep -q .; then
+            git status --short
+            git merge --abort || true
+            echo '::error::Unresolved upstream conflicts. Main was left unchanged.'
+            exit 1
+          fi
+          git commit --no-edit
           echo 'updated=true' >> "$GITHUB_OUTPUT"
 
       - name: Set up Node.js

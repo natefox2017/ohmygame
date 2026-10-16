@@ -15,7 +15,22 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  release-notes:
+    # Keep the upstream validation step ready, but do not run release jobs yet.
+    if: ${{ false }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.19.0
+      - name: Validate version and changelog
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: node scripts/release-notes.mjs --check "$RELEASE_TAG"
+
   windows:
+    needs: release-notes
     if: ${{ false }}
     runs-on: windows-latest
     env:
@@ -78,6 +93,7 @@ jobs:
             release/latest.yml
 
   macos:
+    needs: release-notes
     if: ${{ false }}
     runs-on: macos-14
     env:

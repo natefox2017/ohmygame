@@ -126,7 +126,11 @@ describe("AgentCheckpoints", () => {
   it("preserves Pi session snapshot objects while trimming legacy recovery history", async () => {
     const { project, file } = await fixture();
     const store = new CheckpointStore();
-    await mkdir(project.storagePath!, { recursive: true });
+    const legacy = new AgentCheckpoints(store);
+    // Create the legacy index first: an existing Git checkpoint without a
+    // ledger is intentionally treated as unrecoverable history.
+    await legacy.before(project, "chat", "initial");
+    await legacy.after(project, "initial");
     const modern = await store.snapshot(project);
     const dir = path.join(project.storagePath!, "session");
     await mkdir(dir, { recursive: true });
@@ -134,7 +138,6 @@ describe("AgentCheckpoints", () => {
       type: "custom", customType: "ohmygame-checkpoint",
       data: { version: 1, commit: modern },
     }) + "\n");
-    const legacy = new AgentCheckpoints(store);
     for (let index = 0; index < 22; index += 1) {
       const id = `turn-${index}`;
       await legacy.before(project, "chat", id);

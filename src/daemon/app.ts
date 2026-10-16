@@ -1,4 +1,9 @@
 import { inspectPreviewConfiguration } from "./preview-configuration.js";
+import { CheckpointStore } from "./checkpoints.js";
+import { ProjectWrites } from "./project-writes.js";
+import { registerCheckpointRoutes } from "./checkpoint-routes.js";
+import { readWorkspaceVersion } from "./workspace-notice.js";
+import { withCanvasLock } from "./canvas-workspace.js";
 import { validatePreviewSettings } from "../shared/preview-settings.js";
 import { previewPageUrl } from "../shared/preview-page.js";
 import { PluginSetupManager, registerPluginSetupRoutes } from "./plugin-setup.js";
@@ -14,7 +19,7 @@ import { OnboardingStore } from "./onboarding.js";
 import type { UpdateOnboardingRequest } from "../shared/onboarding.js";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { ModelRuntime, SettingsManager, type SessionEntry } from "@earendil-works/pi-coding-agent";
 import Fastify, { type FastifyReply, type FastifyRequest } from "fastify";
 import { AGENT_REASONING_LEVELS, IMAGE_ASPECT_RATIOS, IMAGE_MAX_REFERENCE_IMAGES, IMAGE_OUTPUT_COUNTS, IMAGE_RESOLUTIONS, IMAGE_SIZES, PROJECT_TYPE_IDS, TOOL_IDS, VIDEO_ASPECT_RATIOS, VIDEO_RESOLUTIONS, type AgentModelRef, type AgentReasoningLevel, type AnswerQuestionnaireRequest, type AssetCanvasTextGenerationRequest, type ConversationAgentSettings, type ConversationCapabilities, type ConversationDetail, type CreateConversationRequest, type CreateLibraryImageRequest, type CreateProjectRequest, type LibraryUploadMediaType, type MediaModelDefaults, type ModelAuthMethod, type ProjectRunSettings, type ProjectState, type ProjectType, type PromptImage, type PromptRequest, type PublishProjectRequest, type RenameConversationRequest, type ReviseLastPromptRequest, type RunToolRequest, type RunVideoToolRequest, type RuntimeEvent, type SetConversationModelRequest, type SetConversationReasoningRequest, type UpdateAgentDefaultsRequest } from "../shared/contracts.js";
 import { findAgentModel, preferredAgentModel } from "../shared/agent-models.js";
@@ -26,6 +31,7 @@ import { PUBLISH_GAME_TITLE_MAX_LENGTH } from "../shared/publish-v1.js";
 import { clampReasoningLevel, parseReasoningLevel, supportedReasoningLevels } from "../shared/reasoning.js";
 import { matchesBearerToken } from "./access.js";
 import { AgentManager, conversationItems, createPiSession, loadPiSkillCatalog, loadPiSkills, type RuntimeModel, type SessionFactory } from "./agent.js";
+import { CHECKPOINT_UNDONE_ENTRY, TURN_END_ENTRY } from "./checkpoint-extension.js";
 import { createAgentTools, projectPiToolNames } from "./agent-tools.js";
 import { ConversationManager, type StoredConversation } from "./conversations.js";
 import { AgentCheckpoints } from "./agent-checkpoints.js";
@@ -78,6 +84,10 @@ import { modelUsageList, modelUsages } from "../shared/custom-models.js";
 import { ToolRunner, ToolRunError } from "./tools.js";
 import type { VideoGenerator } from "./video-generation.js";
 import { ProviderVideos } from "./provider-videos.js";
+import { AudioGenerationError, ProviderAudio, type AudioGenerator } from "./audio-generation.js";
+import { VolcengineTtsProvider } from "./volcengine-tts-provider.js";
+import { VolcengineTtsSettingsStore } from "./volcengine-tts-settings.js";
+import { AUDIO_OUTPUT_FORMATS, AUDIO_SAMPLE_RATES, AUDIO_VOICE_ID_MAX_LENGTH, AUDIO_VOICE_ID_PATTERN, DOUBAO_SPEECH_PROVIDER_NAME, availableAudioOperations, type AudioOperation } from "../shared/audio.js";
 import { isSeedanceProviderId, SEEDANCE_PROVIDER_IDS, SEEDANCE_PROVIDERS } from "./seedance-models.js";
 import { SeedanceSettingsStore } from "./seedance-settings.js";
 import { isMinimaxProviderId, MINIMAX_PROVIDER_IDS, MINIMAX_PROVIDERS } from "./minimax-models.js";
@@ -88,11 +98,14 @@ import { LocalPluginError, LocalPluginStore } from "./local-plugins.js";
 import { inspectPluginSource, installPlugin } from "./plugin-installer.js";
 import { InvalidPluginSettingsError, PluginSettingsStore } from "./plugin-settings.js";
 import { PreinstalledPluginManager } from "./preinstalled-plugins.js";
+import { registerPluginPortabilityRoutes } from "./plugin-portability.js";
 import { PluginSkillContentError, readPluginSkillContent, resolvePluginSkillFile, resolvePluginSkills } from "./plugin-runtime.js";
 import { LegacyMcpConfiguration } from "./legacy-mcp.js";
 import { hasPluginMentionToken, type InstallPluginRequest, type PluginSettings, type PluginSummary, type PluginDetail } from "../shared/plugins.js";
 import { getWorkspaceMedia, listWorkspaceFiles, locateWorkspaceEntry, readWorkspaceFile, validateWorkspaceFile, workspaceMediaInfo, WorkspaceError } from "./workspace.js";
+import { listWorkspaceGitChanges, readWorkspaceGitFile } from "./workspace-git.js";
 import { AssetLibrary, AssetLibraryError } from "./asset-library.js";
+import { exportPlayableProject, PlayableProjectExportError } from "./playable-project-export.js";
 import { AgentAttachmentError, AgentAttachmentStore, MAX_AGENT_ATTACHMENT_BYTES, MAX_AGENT_ATTACHMENTS_PER_TURN } from "./agent-attachments.js";
 import type { GameRuntimeAdapter } from "../shared/playtest.js";
 import type { UpdateWebSearchSettings } from "../shared/web-search.js";
@@ -140,6 +153,8 @@ export interface AppOptions {
   model3DFetch?: typeof fetch;
   videoGenerator?: VideoGenerator;
   videoFetch?: typeof fetch;
+  audioGenerator?: AudioGenerator;
+  audioFetch?: typeof fetch;
   modelDiscoveryFetch?: typeof fetch;
   createModelRuntime?: () => Promise<ModelRuntime>;
   bundledPluginsDirectory?: string;
@@ -304,7 +319,7 @@ const promptSchema = {
           additionalProperties: false,
           required: ["kind", "label", "text"],
           properties: {
-            kind: { enum: ["playable-node", "playable-element", "playable-drawing", "playable-asset", "design-document", "canvas-board"] },
+            kind: { enum: ["playable-node", "playable-element", "playable-drawing", "playable-asset", "playable-moment", "design-document", "canvas-board"] },
             label: { type: "string", minLength: 1, maxLength: 200 },
             text: { type: "string", minLength: 1, maxLength: 16_000 },
           },
@@ -418,6 +433,7 @@ const toolRunSchema = {
     minProperties: 1,
     properties: {
       prompt: { type: "string", minLength: 1, maxLength: 32_000 },
+      text: { type: "string", minLength: 1, maxLength: 10_000 },
       imageModel: modelRefSchema,
       model: modelRefSchema,
       size: { type: "string", enum: [...IMAGE_SIZES] },
@@ -425,6 +441,25 @@ const toolRunSchema = {
       aspectRatio: { type: "string", enum: [...new Set([...IMAGE_ASPECT_RATIOS, ...VIDEO_ASPECT_RATIOS])] },
       outputs: { type: "integer", enum: [...IMAGE_OUTPUT_COUNTS] },
       duration: { type: "integer", minimum: 1, maximum: 30 },
+      durationSeconds: { type: "number", minimum: 0.1, maximum: 600 },
+      voiceId: { type: "string", minLength: 1, maxLength: AUDIO_VOICE_ID_MAX_LENGTH, pattern: AUDIO_VOICE_ID_PATTERN },
+      language: { type: "string", minLength: 1, maxLength: 40 },
+      style: { type: "string", minLength: 1, maxLength: 2_000 },
+      speed: { type: "number", minimum: -50, maximum: 100 },
+      loop: { type: "boolean" },
+      instrumental: { type: "boolean" },
+      lyrics: { type: "string", maxLength: 20_000 },
+      negativePrompt: { type: "string", maxLength: 4_000 },
+      referenceAssetId: { type: "string", minLength: 1, maxLength: 100 },
+      output: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          format: { enum: [...AUDIO_OUTPUT_FORMATS], description: "Must be supported by the selected model; Doubao Speech supports mp3 only." },
+          sampleRate: { type: "integer", enum: [...AUDIO_SAMPLE_RATES] },
+          channels: { type: "integer", enum: [1, 2] },
+        },
+      },
       referenceMode: { enum: ["frame", "reference"] },
       targetPolycount: { type: "integer", minimum: 100, maximum: MODEL_3D_MAX_POLYCOUNT },
       texture: { type: "boolean" },
@@ -549,6 +584,8 @@ export function createApp(options: AppOptions = {}) {
     fetch: options.publishFetch,
   });
   const previews = new PreviewManager(events);
+  const checkpoints = new CheckpointStore();
+  const projectWrites = new ProjectWrites();
   const webSearchSettings = new WebSearchSettingsStore(dataDirectory);
   const onboarding = new OnboardingStore(dataDirectory);
   const networkSettings = options.networkSettings ?? new NetworkSettingsService(dataDirectory);
@@ -558,6 +595,7 @@ export function createApp(options: AppOptions = {}) {
   const native3DProviders = [["meshy", "Meshy", meshySettings], ["tripo", "Tripo", tripoSettings], ["hyper3d", "Hyper3D", hyper3dSettings]] as const;
   const seedanceSettings = new SeedanceSettingsStore(dataDirectory);
   const minimaxSettings = new MinimaxSettingsStore(dataDirectory);
+  const volcengineTtsSettings = new VolcengineTtsSettingsStore(dataDirectory);
   const providerModelSettings = new ProviderModelSettingsStore(dataDirectory, piAgentDirectory);
   const webSearch = new WebSearchService(webSearchSettings, options.webSearchFetch);
   const openAIEndpoint = new ModelEndpointSettingsStore(
@@ -645,6 +683,14 @@ export function createApp(options: AppOptions = {}) {
     nativeModels: (id) => providerModelSettings.models3D(id), isVisible: (model) => providerModelSettings.isVisible(model),
     isEnabled: providerEnabled, request: options.model3DFetch, defaultModel: () => providerModelSettings.defaultModel3D(), cloud: cloudModels,
   });
+  const volcengineTtsProvider = new VolcengineTtsProvider(
+    () => volcengineTtsSettings.key(),
+    options.audioFetch,
+    undefined,
+    () => providerEnabled("volcengine-tts"),
+    () => volcengineTtsSettings.defaultVoiceId(),
+  );
+  const providerAudio = new ProviderAudio([volcengineTtsProvider]);
   const tools = new ToolRunner(
     dataDirectory,
     options.imageGenerator ?? providerImages,
@@ -655,6 +701,18 @@ export function createApp(options: AppOptions = {}) {
       if (toolId === "animate-3d") return input;
       const project = projectId ? projects.get(projectId) : undefined;
       if (projectId && !project) throw new ToolRunError("Project not found", 404);
+      const audioOperation: AudioOperation | undefined = toolId === "generate-speech" ? "speech"
+        : toolId === "generate-sound-effect" ? "sound-effect"
+          : toolId === "generate-music" ? "music" : undefined;
+      if (audioOperation) {
+        const explicit = (input as { model?: AgentModelRef }).model;
+        const selected = providerAudio.resolveModel(audioOperation, explicit);
+        if (!selected) {
+          if (options.audioGenerator) return input;
+          throw new ToolRunError(`No ${audioOperation === "sound-effect" ? "sound effect" : audioOperation} model is available. Connect an audio provider first.`, 503);
+        }
+        return { ...input, model: { provider: selected.provider, id: selected.id } };
+      }
       const usage = toolId === "generate-image" ? "image" : toolId === "generate-video" ? "video" : "3d";
       const key = usage === "image" ? "imageModel" : "model";
       const explicit = (input as { imageModel?: AgentModelRef; model?: AgentModelRef })[key];
@@ -682,6 +740,7 @@ export function createApp(options: AppOptions = {}) {
       }
       return { ...input, [key]: { ...selected } };
     },
+    options.audioGenerator ?? providerAudio,
   );
   const pluginSettings = new PluginSettingsStore(dataDirectory);
   const legacyMcp = new LegacyMcpConfiguration(piAgentDirectory);
@@ -703,6 +762,12 @@ export function createApp(options: AppOptions = {}) {
   ], pluginSettings, (plugin) => preinstalledPlugins.decorate(plugin));
   const withPluginCapabilities = async (plugin: Awaited<ReturnType<typeof plugins.read>>) => plugin ? pluginCapabilities.decorate(plugin) : plugin;
   let agents: AgentManager;
+  const snapshotWorkspace = (project: ProjectState) => projectWrites.snapshot(project.id, async () => {
+    if (!projects.get(project.id)) throw new Error("Project not found");
+    if (await checkpoints.unfinished(project)) throw new Error("Recover the interrupted file restore before continuing.");
+    await canvasStore.waitForProject(project.id);
+    return previews.withWorkspaceStopped(project, () => withCanvasLock(project.workspacePath, () => checkpoints.snapshot(project)));
+  });
   agents = new AgentManager(events, {
     errorDiagnostics: () => {
       const route = networkSettings.get().active;
@@ -763,11 +828,16 @@ export function createApp(options: AppOptions = {}) {
         () => resolvePluginSkills([bundledPlugins, localPlugins], pluginSettings, project.type),
         Object.keys(effectiveMcp.mcpServers).length ? { factory: await pluginCapabilities.host.extension(effectiveMcp), host: pluginCapabilities.host } : undefined,
         (provider) => providerModelSettings.responsesTransport(provider),
+        () => snapshotWorkspace(project),
       );
     }),
     activeToolNames: (project, mode, session) => {
       const registered = session.getAllTools?.().map((tool) => tool.name) ?? [];
-      return projectPiToolNames(mode, TOOL_IDS, registered, webSearch.enabled());
+      const audioOperations = availableAudioOperations(providerAudio.catalog().models);
+      const enabledTools = TOOL_IDS.filter((toolId) => toolId === "generate-speech" ? audioOperations.has("speech")
+        : toolId === "generate-sound-effect" ? audioOperations.has("sound-effect")
+          : toolId === "generate-music" ? audioOperations.has("music") : true);
+      return projectPiToolNames(mode, enabledTools, registered, webSearch.enabled());
     },
     // Injected sessions are an explicit test/dev override; normal Pi sessions always checkpoint.
     ...(options.createSession ? {} : {
@@ -783,6 +853,10 @@ export function createApp(options: AppOptions = {}) {
     onRunFinished: async (project, conversationId) => {
       await agentPlaytests.get(`${project.id}:${conversationId}`)?.cleanup();
     },
+    checkpoints: {
+      snapshot: snapshotWorkspace,
+      changed: (project, from, to) => checkpoints.summarize(project, from, to),
+    },
     onRunCompleted: (project) => {
       void previews.automatic(project, true).catch(() => {});
     },
@@ -794,6 +868,7 @@ export function createApp(options: AppOptions = {}) {
     logger: options.logger ?? false,
     ajv: { customOptions: { coerceTypes: false } },
   });
+  projectWrites.install(app);
   const canvasStore = registerCanvasRoutes(app, { projects, library, tools });
   registerPluginCapabilityRoutes(app, { capabilities: pluginCapabilities, plugins, invalidate: invalidatePluginSessions });
   const pluginSetup = new PluginSetupManager(dataDirectory, piAgentDirectory, pluginCapabilities, plugins, localPlugins, invalidatePluginSessions, async ref => {
@@ -804,6 +879,7 @@ export function createApp(options: AppOptions = {}) {
   });
   registerPluginSetupRoutes(app, pluginSetup);
   registerPluginIconRoutes(app, [bundledPlugins, localPlugins]);
+  registerPluginPortabilityRoutes(app, { local: localPlugins, plugins, capabilities: pluginCapabilities, settings: pluginSettings, invalidate: invalidatePluginSessions });
 
   app.addContentTypeParser("image/webp", { parseAs: "buffer", bodyLimit: MAX_PROJECT_COVER_BYTES }, (_request, body, done) => {
     done(null, body);
@@ -825,7 +901,8 @@ export function createApp(options: AppOptions = {}) {
     await onboarding.load().catch((err) => app.log.warn({ err }, "Could not load onboarding state"));
     await Promise.all([library.load(), projects.load((projectDirectory, cause) => {
       app.log.warn({ err: cause, projectDirectory }, "Could not load project; skipped during startup");
-    }), tools.load(), pluginSettings.load(), pluginCapabilities.configuration.load(), bundledPlugins.load(), preinstalledPlugins.load(), webSearchSettings.load(), openAIEndpoint.load(), loadOpenAIImages(), meshySettings.load(), tripoSettings.load(), hyper3dSettings.load(), seedanceSettings.load(), minimaxSettings.load(), providerModelSettings.load()]);
+    }), tools.load(), pluginSettings.load(), pluginCapabilities.configuration.load(), bundledPlugins.load(), preinstalledPlugins.load(), webSearchSettings.load(), openAIEndpoint.load(), loadOpenAIImages(), meshySettings.load(), tripoSettings.load(), hyper3dSettings.load(), seedanceSettings.load(), minimaxSettings.load(), volcengineTtsSettings.load(), providerModelSettings.load()]);
+    await Promise.all(projects.list().map(async (project) => { projectWrites.initialize(project.id, await readWorkspaceVersion(project)); }));
     for (const error of await preinstalledPlugins.seed(localPlugins)) app.log.warn(error);
     const examplesWarning = await examples.load();
     if (examplesWarning) app.log.warn(examplesWarning);
@@ -838,7 +915,8 @@ export function createApp(options: AppOptions = {}) {
     const origin = request.headers.origin;
     if (origin && allowedOrigins.has(origin)) {
       reply.header("access-control-allow-origin", origin);
-      reply.header("access-control-allow-headers", "authorization, content-type, last-event-id, x-publish-access-token");
+      reply.header("access-control-allow-headers", "authorization, content-type, last-event-id, x-workspace-version, x-publish-access-token");
+      reply.header("access-control-expose-headers", "x-workspace-version");
       reply.header("access-control-allow-methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
       reply.header("vary", "Origin");
     }
@@ -876,6 +954,12 @@ export function createApp(options: AppOptions = {}) {
   app.addHook("onError", async (request) => { releaseProjectWrite(request); });
 
   app.get("/health", async () => ({ status: "ok" }));
+
+  registerCheckpointRoutes(app, {
+    store: checkpoints,
+    snapshot: snapshotWorkspace, writes: projectWrites, projects, conversations, agents, previews, events,
+    busy: (id) => publishing.has(id) || canvasStore.isProjectBusy(id) || tools.jobs().some((job) => job.context?.projectId === id && job.status === "running"),
+  });
 
   // The page Scenes run in. The desktop app loads its own pages from file://,
   // where a sandboxed frame may not load its script, so the frame comes from
@@ -1126,6 +1210,8 @@ export function createApp(options: AppOptions = {}) {
       if (request.body?.viewport && request.body.type !== "interactive-story") {
         return reply.code(400).send({ error: "A viewport requires an Interactive Story project" });
       }
+      const existing = request.body?.workspacePath ? await projects.findByWorkspace(request.body.workspacePath) : undefined;
+      if (existing) return reply.code(200).send(existing);
       const project = await projects.create(request.body?.name, request.body?.type, request.body?.workspacePath);
       if (project.type === "interactive-story") {
         try {
@@ -1578,7 +1664,10 @@ export function createApp(options: AppOptions = {}) {
   app.delete<{ Params: { projectId: string } }>("/projects/:projectId", async (request, reply) => {
     const project = projects.get(request.params.projectId);
     if (!project) return reply.code(404).send({ error: "Project not found" });
+    // A project reads as idle from the end of a run, a little before its turn is closed; what is asked of it then waits.
+    await agents.turnsClosed(project.id);
     if (agents.isProjectBusy(project.id)) return reply.code(409).send({ error: "Wait for the agent to finish before deleting this project" });
+    return projectWrites.exclusive(project.id, async () => {
     await previews.forget(project);
     agents.forgetProject(project.id);
     conversations.forget(project);
@@ -1589,8 +1678,12 @@ export function createApp(options: AppOptions = {}) {
     }
     await conversationImages.removeProject(project.id);
     await canvasStore.cancelProject(project.id);
+    await canvasStore.waitForProject(project.id);
+    // A snapshot that is still being taken writes into the folder that is about to be removed.
+    await checkpoints.settled(project);
     await projects.delete(project.id);
     return reply.code(204).send();
+    });
   });
 
   registerCommunityRoutes(app, publisher, projects);
@@ -1802,6 +1895,26 @@ export function createApp(options: AppOptions = {}) {
     return reply.code(204).send();
   });
 
+  app.get<{ Params: { projectId: string } }>("/projects/:projectId/git/changes", async (request, reply) => {
+    const project = projects.get(request.params.projectId);
+    if (!project) return reply.code(404).send({ error: "Project not found" });
+    return listWorkspaceGitChanges(project.workspacePath);
+  });
+
+  app.get<{ Params: { projectId: string }; Querystring: { path: string } }>(
+    "/projects/:projectId/git/file",
+    { schema: { querystring: assetPathQuerySchema } },
+    async (request, reply) => {
+      const project = projects.get(request.params.projectId);
+      if (!project) return reply.code(404).send({ error: "Project not found" });
+      try { return await readWorkspaceGitFile(project.workspacePath, request.query.path); }
+      catch (cause) {
+        if (cause instanceof WorkspaceError) return reply.code(cause.code === "ENOENT" ? 404 : 400).send({ error: cause.message });
+        throw cause;
+      }
+    },
+  );
+
   app.get<{ Params: { projectId: string } }>("/projects/:projectId/files", async (request, reply) => {
     const project = projects.get(request.params.projectId);
     if (!project) return reply.code(404).send({ error: "Project not found" });
@@ -2012,8 +2125,10 @@ export function createApp(options: AppOptions = {}) {
   });
 
   const providerSummaries = async () => {
-    const piProviders = await modelAuth.providers();
-    const customProviders = await providerModelSettings.customProviderCatalog();
+    const [piProviders, customProviders] = await Promise.all([
+      modelAuth.providers(),
+      providerModelSettings.customProviderCatalog(),
+    ]);
     const customModels = new Map(customProviders.map((provider) => [provider.id, provider]));
     const customImageProviders = new Set(customProviders
       .filter((provider) => CUSTOM_IMAGE_MODEL_APIS.some((api) => api === provider.api)).map((provider) => provider.id));
@@ -2218,7 +2333,8 @@ export function createApp(options: AppOptions = {}) {
     const native = native3DProviders.find(([id]) => id === providerId);
     const seedance = isSeedanceProviderId(providerId);
     const minimax = isMinimaxProviderId(providerId);
-    if (!native && !seedance && !minimax && !runtime.getProvider(providerId)) throw new ModelAuthError("Model provider not found", 404);
+    const volcengineTts = providerId === "volcengine-tts";
+    if (!native && !seedance && !minimax && !volcengineTts && !runtime.getProvider(providerId)) throw new ModelAuthError("Model provider not found", 404);
     const previousEndpoint = providerId === "openai" ? openAIEndpoint.override() : undefined;
     try {
       await providerModelSettings.removeProviderSettings(providerId, async () => {
@@ -2227,6 +2343,7 @@ export function createApp(options: AppOptions = {}) {
         if (native) await native[2].clear();
         else if (seedance) await seedanceSettings.clear(providerId);
         else if (minimax) await minimaxSettings.clear(providerId);
+        else if (volcengineTts) await volcengineTtsSettings.clear();
         else await runtime.logout(providerId);
         await syncOpenAIEndpoint(runtime);
         if (providerId === "openai") await openAIImages.clear(false);
@@ -2292,6 +2409,53 @@ export function createApp(options: AppOptions = {}) {
     return reply.code(204).send();
   });
 
+  app.get("/settings/models/providers/volcengine-tts", async () => volcengineTtsSettings.get());
+  app.put<{ Body: { apiKey?: string; defaultVoiceId?: string | null } }>("/settings/models/providers/volcengine-tts", { schema: { body: {
+    type: "object", additionalProperties: false, minProperties: 1,
+    properties: { apiKey: { type: "string", minLength: 1, maxLength: 10_000 }, defaultVoiceId: { anyOf: [{ type: "string", minLength: 1, maxLength: AUDIO_VOICE_ID_MAX_LENGTH, pattern: AUDIO_VOICE_ID_PATTERN }, { type: "null" }] } },
+  } } }, async (request, reply) => {
+    try { return await volcengineTtsSettings.update(request.body.apiKey, request.body.defaultVoiceId); }
+    catch (cause) { return reply.code(400).send({ error: cause instanceof Error ? cause.message : String(cause) }); }
+  });
+  app.post<{ Body: { text: string; voiceId?: string; language?: string; style?: string; speed?: number } }>(
+    "/settings/models/providers/volcengine-tts/preview",
+    { schema: { body: {
+      type: "object", additionalProperties: false, required: ["text"],
+      properties: {
+        text: { type: "string", minLength: 1, maxLength: 500 },
+        voiceId: { type: "string", minLength: 1, maxLength: AUDIO_VOICE_ID_MAX_LENGTH, pattern: AUDIO_VOICE_ID_PATTERN },
+        language: { type: "string", minLength: 1, maxLength: 40 },
+        style: { type: "string", minLength: 1, maxLength: 500 },
+        speed: { type: "number", minimum: -50, maximum: 100 },
+      },
+    } } },
+    async (request, reply) => {
+      try {
+        const generated = await volcengineTtsProvider.generate({
+          operation: "speech",
+          model: { provider: "volcengine-tts", id: "seed-tts-2.0" },
+          text: request.body.text,
+          voiceId: request.body.voiceId,
+          language: request.body.language,
+          style: request.body.style,
+          speed: request.body.speed,
+          output: { format: "mp3", sampleRate: 24_000 },
+        });
+        reply.header("content-type", generated.mediaType);
+        reply.header("cache-control", "no-store");
+        if (generated.metadata?.providerRequestId) reply.header("x-provider-request-id", generated.metadata.providerRequestId);
+        return reply.send(Buffer.from(generated.bytes));
+      } catch (cause) {
+        if (cause instanceof AudioGenerationError) return reply.code(cause.statusCode).send({ error: cause.message });
+        throw cause;
+      }
+    },
+  );
+  app.delete("/settings/models/providers/volcengine-tts", async (_request, reply) => {
+    await volcengineTtsSettings.clear();
+    return reply.code(204).send();
+  });
+
   app.get("/settings/models/providers/openai/endpoint", async () => openAIEndpoint.get());
 
   const supportsResponsesTransport = async (providerId: string) => providerId === "openai"
@@ -2313,7 +2477,7 @@ export function createApp(options: AppOptions = {}) {
   });
 
   const hasModelProvider = async (runtime: ModelRuntime, id: string) => isNative3DProvider(id) || Boolean(runtime.getProvider(id))
-    || id.startsWith("cloud-") && (await cloudModels.cloudCatalog()).providers.some((provider) => provider.id === id);
+    || id.startsWith("cloud-") && cloudModels.hasProvider(id);
   const providerModels = async (runtime: ModelRuntime, providerId: string): Promise<ProviderModelSettings> => {
     if (isNative3DProvider(providerId)) {
       const native = native3DProviders.find(([id]) => id === providerId)!;
@@ -2326,7 +2490,8 @@ export function createApp(options: AppOptions = {}) {
       catalogDocsUrl: MODEL_3D_CATALOG_DOCS[providerId] };
     }
     if (providerId.startsWith("cloud-")) {
-      const catalog = await cloudModels.cloudCatalog();
+      void cloudModels.refresh();
+      const catalog = cloudModels.catalogSnapshot();
       const provider = catalog.providers.find((provider) => provider.id === providerId);
       return { models: catalog.models.filter((model) => model.provider === providerId).map((model) => ({
         provider: providerId, providerName: provider?.name ?? providerId, id: model.id, name: model.name, reasoningLevels: [], capabilities: [model.capability],
@@ -2493,6 +2658,7 @@ export function createApp(options: AppOptions = {}) {
 
   app.get("/image-models", async () => providerImages.models());
   app.get("/video-models", async () => providerVideos.models());
+  app.get("/audio-models/catalog", async () => providerAudio.catalog());
   for (const [path, usage, generator] of [
     ["image-models", "image", providerImages], ["video-models", "video", providerVideos], ["model3d-models", "3d", providerModels3D],
   ] as const) {
@@ -2594,13 +2760,29 @@ export function createApp(options: AppOptions = {}) {
           ),
         } : {}),
       };
-      const branch = (await conversations.view(project, conversation)).getBranch();
+      // Cache reads revalidate after earlier readers settle. Retry only when a
+      // run or a delayed turn end changed during this read, so the response's
+      // event cursor cannot skip checkpoint metadata missing from its branch.
+      let branch: SessionEntry[];
+      let run = agents.activeStart(project.id, conversation.summary.id);
+      let ends = agents.turnEndsRecorded(project.id, conversation.summary.id);
+      for (;;) {
+        branch = (await conversations.view(project, conversation)).getBranch();
+        const now = agents.activeStart(project.id, conversation.summary.id);
+        const endsNow = agents.turnEndsRecorded(project.id, conversation.summary.id);
+        if ((!run || run.id === now?.id) && ends === endsNow) break;
+        run = now;
+        ends = endsNow;
+      }
       // Capture live state and its cursor together after all asynchronous reads.
       const currentRun = agents.activeStart(project.id, conversation.summary.id);
       const activeItems = agents.activeItems(project.id, conversation.summary.id);
       const activePlanState = agents.planState(conversation);
+      // The end of an earlier turn is kept whatever its time: it is written when a run is over, in the very
+      // millisecond in which a message that waited for that starts the next run.
+      const before = (entry: SessionEntry) => !currentRun || entry.timestamp < currentRun.timestamp || (entry.type === "custom" && (entry.customType === TURN_END_ENTRY || entry.customType === CHECKPOINT_UNDONE_ENTRY));
       const loadedItems = [
-        ...conversationItems(currentRun ? branch.filter((entry) => entry.timestamp < currentRun.timestamp) : branch, !currentRun),
+        ...conversationItems(branch.filter(before), !currentRun),
         // A reset must be a complete snapshot. Replaying from the active turn's
         // start is unsafe once a chat produces more events than the replay buffer.
         ...(currentRun ? activeItems : []),
@@ -3152,6 +3334,23 @@ export function createApp(options: AppOptions = {}) {
     } catch (cause) {
       const statusCode = cause instanceof PublishError ? cause.statusCode : 500;
       return reply.code(statusCode).send({ error: cause instanceof Error ? cause.message : String(cause) });
+    }
+  });
+
+  app.post<{ Params: { projectId: string } }>("/projects/:projectId/interactive-story/export-project", async (request, reply) => {
+    const project = projects.get(request.params.projectId);
+    if (!project) return reply.code(404).send({ error: "Project not found" });
+    if (project.type !== "interactive-story") return reply.code(409).send({ error: "Project export requires an Interactive Story project" });
+    if (agents.isProjectBusy(project.id)) return reply.code(409).send({ error: "Wait for the agent to finish before exporting" });
+    try {
+      const archive = await exportPlayableProject(project.workspacePath, library);
+      return reply
+        .header("content-type", "application/zip")
+        .header("content-disposition", `attachment; filename="${encodeURIComponent(project.name)}.zip"`)
+        .send(archive);
+    } catch (cause) {
+      if (cause instanceof PlayableProjectExportError) return reply.code(cause.statusCode).send({ error: cause.message });
+      throw cause;
     }
   });
 

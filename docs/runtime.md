@@ -388,11 +388,34 @@ projects/<project-id>/
 ├── cover-frozen.webp frozen automatic cover or Interactive Story thumbnail
 ├── cover-state.json explicit cover mode, including when no cover exists
 ├── preview-origin.json stable local preview port
+├── checkpoints/   snapshots of the workspace, one bare Git repository
 ├── workspace/     the project files (or an existing folder in the desktop app)
 └── session/       Pi session files, one per conversation
 ```
 
 Removing a project never deletes an existing folder used as its workspace.
+Choosing a folder that is already a project's workspace when creating a project
+opens that project instead; a folder inside another workspace can hold a
+project of its own.
+
+## Checkpoints
+
+All project types record private workspace snapshots before each consumed user
+message and when its run ends. Finished, failed and cancelled turns show their
+net file changes in Chat. The project does not need Git; snapshot storage stays
+beside the workspace without changing its `.git`, branches or index.
+
+**Undo** takes back one turn's files while preserving the conversation, and
+**Reapply** restores their exact pre-undo contents. Editing a message preserves
+files. **Restore to before this message** explicitly restores the workspace and
+rewinds the selected conversation. These operations coordinate project writes,
+check later edits for conflicts, and retain recovery data if interrupted.
+
+See [turn file changes and recovery](checkpoints.md) for the UI, file scope,
+workspace versions, model notices, storage limits, and API routes, and
+[Git changes in Code](workspace-git.md) for the read-only repository view.
+
+## Project covers
 
 Project covers are saved independently of publishing. Selecting an image in the
 publish dialog previews it; **Apply cover** saves it and stops automatic cover

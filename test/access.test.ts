@@ -61,10 +61,18 @@ describe("desktop daemon access", () => {
     const allowed = await app.inject({
       method: "OPTIONS",
       url: "/projects",
-      headers: { origin: "http://127.0.0.1:43120" },
+      headers: {
+        origin: "http://127.0.0.1:43120",
+        "access-control-request-method": "POST",
+        "access-control-request-headers": "authorization,content-type,x-workspace-version",
+      },
     });
     expect(allowed.statusCode).toBe(204);
     expect(allowed.headers["access-control-allow-origin"]).toBe("http://127.0.0.1:43120");
+    expect(String(allowed.headers["access-control-allow-headers"]).split(/\s*,\s*/)).toEqual(
+      expect.arrayContaining(["authorization", "content-type", "x-workspace-version", "x-publish-access-token"]),
+    );
+    expect(allowed.headers["access-control-expose-headers"]).toBe("x-workspace-version");
 
     const rejected = await app.inject({
       method: "OPTIONS",

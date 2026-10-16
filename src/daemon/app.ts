@@ -43,6 +43,7 @@ import { ArtifactBuilder, PublishError } from "./publish/archive.js";
 import { PlayableDraftServer } from "./playable-draft-server.js";
 import { promptContextBlock } from "./prompt-context.js";
 import { RemotePublisher, RemotePublishError } from "./publish/client.js";
+import { registerCommunityRoutes } from "./publish/community-routes.js";
 import { LocalPublisher } from "./publish/local.js";
 import { LOCAL_DEBUG_ACCESS_TOKEN } from "../shared/local-debug.js";
 import { PreviewManager, PreviewCancelledError } from "./preview.js";
@@ -55,6 +56,7 @@ import { openAIImageConnection, registerOpenAIImageRoutes } from "./openai-image
 import { RESPONSES_TRANSPORT_MODES, type ResponsesTransportSettings } from "../shared/contracts.js";
 import { NetworkSettingsService } from "./network-settings.js";
 import type { NetworkSettings } from "../shared/network-settings.js";
+import { migrateAzureProviderId } from "./azure-provider-migration.js";
 import { normalizeCustomProvider, normalizeCustomProviderModel, ProviderModelSettingsStore } from "./provider-model-settings.js";
 import { discoverProviderModels } from "./provider-model-discovery.js";
 import { customModelCatalog } from "./custom-model-capabilities.js";
@@ -78,6 +80,8 @@ import type { VideoGenerator } from "./video-generation.js";
 import { ProviderVideos } from "./provider-videos.js";
 import { isSeedanceProviderId, SEEDANCE_PROVIDER_IDS, SEEDANCE_PROVIDERS } from "./seedance-models.js";
 import { SeedanceSettingsStore } from "./seedance-settings.js";
+import { isMinimaxProviderId, MINIMAX_PROVIDER_IDS, MINIMAX_PROVIDERS } from "./minimax-models.js";
+import { MinimaxSettingsStore } from "./minimax-settings.js";
 import { BundledPluginAdapter, LocalPluginAdapter, PluginCatalogService, pluginSummary } from "./plugin-catalog.js";
 import { BundledPluginStore } from "./bundled-plugins.js";
 import { LocalPluginError, LocalPluginStore } from "./local-plugins.js";
@@ -553,6 +557,7 @@ export function createApp(options: AppOptions = {}) {
   const hyper3dSettings = new MediaProviderKeyStore(dataDirectory, "hyper3d", "Hyper3D");
   const native3DProviders = [["meshy", "Meshy", meshySettings], ["tripo", "Tripo", tripoSettings], ["hyper3d", "Hyper3D", hyper3dSettings]] as const;
   const seedanceSettings = new SeedanceSettingsStore(dataDirectory);
+  const minimaxSettings = new MinimaxSettingsStore(dataDirectory);
   const providerModelSettings = new ProviderModelSettingsStore(dataDirectory, piAgentDirectory);
   const webSearch = new WebSearchService(webSearchSettings, options.webSearchFetch);
   const openAIEndpoint = new ModelEndpointSettingsStore(
@@ -629,6 +634,7 @@ export function createApp(options: AppOptions = {}) {
   });
   const providerVideos = new ProviderVideos(getModelRuntime, options.videoFetch, (providerId) => seedanceSettings.key(providerId), providerEnabled, {
     customProviders: () => providerModelSettings.customProviderCatalog(), defaultModel: () => providerModelSettings.defaultVideoModel(),
+    minimaxApiKey: (providerId) => minimaxSettings.key(providerId),
   });
   const providerModels3D = new ProviderModels3D({
     runtime: getModelRuntime,
@@ -813,11 +819,13 @@ export function createApp(options: AppOptions = {}) {
   const loadOpenAIImages = () => openAIImages.load().catch((err) => app.log.warn({ err }, "Could not load OpenAI image settings"));
   app.addHook("onReady", async () => {
     await networkSettings.load();
+    // Runs before any model lookup so saved Azure sign-ins resolve under Pi's current provider ID.
+    await migrateAzureProviderId(piAgentDirectory, dataDirectory).catch((err) => app.log.warn({ err }, "Could not migrate Azure provider settings"));
     // A damaged welcome preference must not prevent projects from opening.
     await onboarding.load().catch((err) => app.log.warn({ err }, "Could not load onboarding state"));
     await Promise.all([library.load(), projects.load((projectDirectory, cause) => {
       app.log.warn({ err: cause, projectDirectory }, "Could not load project; skipped during startup");
-    }), tools.load(), pluginSettings.load(), pluginCapabilities.configuration.load(), bundledPlugins.load(), preinstalledPlugins.load(), webSearchSettings.load(), openAIEndpoint.load(), loadOpenAIImages(), meshySettings.load(), tripoSettings.load(), hyper3dSettings.load(), seedanceSettings.load(), providerModelSettings.load()]);
+    }), tools.load(), pluginSettings.load(), pluginCapabilities.configuration.load(), bundledPlugins.load(), preinstalledPlugins.load(), webSearchSettings.load(), openAIEndpoint.load(), loadOpenAIImages(), meshySettings.load(), tripoSettings.load(), hyper3dSettings.load(), seedanceSettings.load(), minimaxSettings.load(), providerModelSettings.load()]);
     for (const error of await preinstalledPlugins.seed(localPlugins)) app.log.warn(error);
     const examplesWarning = await examples.load();
     if (examplesWarning) app.log.warn(examplesWarning);
@@ -830,7 +838,7 @@ export function createApp(options: AppOptions = {}) {
     const origin = request.headers.origin;
     if (origin && allowedOrigins.has(origin)) {
       reply.header("access-control-allow-origin", origin);
-      reply.header("access-control-allow-headers", "authorization, content-type, last-event-id");
+      reply.header("access-control-allow-headers", "authorization, content-type, last-event-id, x-publish-access-token");
       reply.header("access-control-allow-methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
       reply.header("vary", "Origin");
     }
@@ -1585,39 +1593,7 @@ export function createApp(options: AppOptions = {}) {
     return reply.code(204).send();
   });
 
-  app.get("/community/games", async (_request, reply) => {
-    try {
-      return await publisher.community();
-    } catch (cause) {
-      const error = cause instanceof Error ? cause.message : String(cause);
-      return reply.code(cause instanceof RemotePublishError ? cause.statusCode : 502).send({ error });
-    }
-  });
-
-  app.get<{ Params: { gameId: string } }>("/community/games/:gameId", async (request, reply) => {
-    try {
-      return await publisher.communityGame(request.params.gameId);
-    } catch (cause) {
-      const error = cause instanceof Error ? cause.message : String(cause);
-      return reply.code(cause instanceof RemotePublishError ? cause.statusCode : 502).send({ error });
-    }
-  });
-
-  app.get<{ Params: { gameId: string; deploymentId: string } }>(
-    "/community/games/:gameId/deployments/:deploymentId/cover",
-    async (request, reply) => {
-      try {
-        const cover = await publisher.communityGameCover(request.params.gameId, request.params.deploymentId);
-        reply.header("content-type", "image/webp");
-        reply.header("cache-control", "private, max-age=31536000, immutable");
-        reply.header("x-content-type-options", "nosniff");
-        return reply.send(cover);
-      } catch (cause) {
-        const error = cause instanceof Error ? cause.message : String(cause);
-        return reply.code(cause instanceof RemotePublishError ? cause.statusCode : 502).send({ error });
-      }
-    },
-  );
+  registerCommunityRoutes(app, publisher, projects);
 
   app.get("/library/assets", async (request) => {
     const associations = await projects.libraryAssetAssociations((project, cause) => request.log.warn({ projectId: project.id, err: cause }, "Could not read Library asset usage"));
@@ -2082,6 +2058,20 @@ export function createApp(options: AppOptions = {}) {
         credentialType: "api_key" as const,
         capabilities: providerId === "volcengine-ark" ? ["image", "video"] as const : ["video"] as const,
       };
+    }), ...MINIMAX_PROVIDER_IDS.map((providerId) => {
+      const definition = MINIMAX_PROVIDERS[providerId];
+      const configured = minimaxSettings.get(providerId).configured;
+      return {
+        id: definition.id,
+        name: definition.name,
+        configured,
+        enabled: providerEnabled(providerId),
+        custom: false,
+        status: configured ? "connected" as const : "not_configured" as const,
+        methods: [{ type: "api_key" as const, label: `${definition.name} API key` }],
+        credentialType: "api_key" as const,
+        capabilities: ["video"] as const,
+      };
     })];
     const codexConnection = await codexImages.connection();
     const codexProvider = {
@@ -2227,7 +2217,8 @@ export function createApp(options: AppOptions = {}) {
     const runtime = await getModelRuntime();
     const native = native3DProviders.find(([id]) => id === providerId);
     const seedance = isSeedanceProviderId(providerId);
-    if (!native && !seedance && !runtime.getProvider(providerId)) throw new ModelAuthError("Model provider not found", 404);
+    const minimax = isMinimaxProviderId(providerId);
+    if (!native && !seedance && !minimax && !runtime.getProvider(providerId)) throw new ModelAuthError("Model provider not found", 404);
     const previousEndpoint = providerId === "openai" ? openAIEndpoint.override() : undefined;
     try {
       await providerModelSettings.removeProviderSettings(providerId, async () => {
@@ -2235,6 +2226,7 @@ export function createApp(options: AppOptions = {}) {
         if (previousEndpoint) await openAIEndpoint.update(openAIEndpoint.defaultBaseUrl);
         if (native) await native[2].clear();
         else if (seedance) await seedanceSettings.clear(providerId);
+        else if (minimax) await minimaxSettings.clear(providerId);
         else await runtime.logout(providerId);
         await syncOpenAIEndpoint(runtime);
         if (providerId === "openai") await openAIImages.clear(false);
@@ -2282,6 +2274,21 @@ export function createApp(options: AppOptions = {}) {
   app.delete<{ Params: { providerId: string } }>("/settings/models/providers/:providerId/seedance-key", async (request, reply) => {
     if (!isSeedanceProviderId(request.params.providerId)) return reply.code(404).send({ error: "Seedance provider not found" });
     await seedanceSettings.clear(request.params.providerId);
+    return reply.code(204).send();
+  });
+
+  app.put<{ Params: { providerId: string }; Body: { apiKey: string } }>(
+    "/settings/models/providers/:providerId/minimax-key",
+    { schema: apiKeySettingsSchema },
+    async (request, reply) => {
+      if (!isMinimaxProviderId(request.params.providerId)) return reply.code(404).send({ error: "MiniMax provider not found" });
+      try { return await minimaxSettings.update(request.params.providerId, request.body.apiKey); }
+      catch (cause) { return reply.code(400).send({ error: cause instanceof Error ? cause.message : String(cause) }); }
+    },
+  );
+  app.delete<{ Params: { providerId: string } }>("/settings/models/providers/:providerId/minimax-key", async (request, reply) => {
+    if (!isMinimaxProviderId(request.params.providerId)) return reply.code(404).send({ error: "MiniMax provider not found" });
+    await minimaxSettings.clear(request.params.providerId);
     return reply.code(204).send();
   });
 

@@ -259,7 +259,7 @@ jobs:
               --verify-tag \
               --title "OhMyGame $GITHUB_REF_NAME" \
               --prerelease \
-              --generate-notes
+              --notes-file "$RELEASE_NOTES_FILE"
           fi
       - name: Delete intermediate GitHub artifacts
         if: ${{ success() }}

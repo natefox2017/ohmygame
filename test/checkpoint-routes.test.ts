@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { createApp } from "../src/daemon/app.js";
 import { AgentCheckpoints } from "../src/daemon/agent-checkpoints.js";
+import { readWorkspaceVersion } from "../src/daemon/workspace-notice.js";
 import type { ProjectState } from "../src/shared/contracts.js";
 
 const opened: Array<{ app: ReturnType<typeof createApp>; folder: string }> = [];
@@ -45,9 +46,24 @@ describe("checkpoint recovery API", () => {
     expect(refused.statusCode).toBe(400);
     expect(await readFile(file, "utf8")).toBe("after\n");
 
+    const beforeRead = await app.inject({ method: "GET", url: `/projects/${state.id}` });
+    const priorVersion = beforeRead.headers["x-workspace-version"] as string;
+    expect(priorVersion).toBeTruthy();
+
     const undone = await app.inject({ method: "POST", url: base + "/undo", payload: { turnId: "turn-1", confirm: true } });
     expect(undone.statusCode, undone.body).toBe(200);
     expect(await readFile(file, "utf8")).toBe("before\n");
+    const afterRead = await app.inject({ method: "GET", url: `/projects/${state.id}` });
+    const newVersion = afterRead.headers["x-workspace-version"] as string;
+    expect(newVersion).not.toBe(priorVersion);
+    expect(await readWorkspaceVersion(state)).toBe(newVersion);
+    const staleSave = await app.inject({
+      method: "PATCH", url: `/projects/${state.id}`,
+      headers: { "x-workspace-version": priorVersion },
+      payload: { name: "Stale editor save" },
+    });
+    expect(staleSave.statusCode, staleSave.body).toBe(409);
+    expect(staleSave.body).toContain("Reload");
 
     const recovered = await app.inject({ method: "POST", url: base + "/restore", payload: { commit: undone.json().previous, confirm: true } });
     expect(recovered.statusCode, recovered.body).toBe(200);

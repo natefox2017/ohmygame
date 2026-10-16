@@ -2,7 +2,7 @@ import { copyFile, link, lstat, mkdir, readFile, readdir, rename, rm, statfs, wr
 import path from "node:path";
 import type { ProjectState } from "../shared/contracts.js";
 import { checkpointDirectory } from "./checkpoints.js";
-import { initialize, readCommitTree, readHead, readTree, verifyBlob, writeAtomically, writeCommit, writeHead, TREE_MODE } from "./checkpoint-objects.js";
+import { initialize, readCommit, readCommitTree, readHead, readTree, verifyBlob, writeAtomically, writeCommit, writeHead, TREE_MODE } from "./checkpoint-objects.js";
 import type { AgentCheckpointTurn } from "./agent-checkpoints.js";
 
 export const CHECKPOINT_MAX_BYTES = 5 * 1024 * 1024 * 1024;
@@ -226,9 +226,11 @@ export async function compactCheckpointHistory(
   try {
     await initialize(next);
     for (const id of ids) {
-      const tree = await readCommitTree(active, id);
+      const { tree, unreadable } = await readCommit(active, id);
       await copyTreeObjects(active, next, tree, copied);
-      const nextCommit = await writeCommit(next, tree, parent, []);
+      // Retain the unreadable-file scope. Losing this metadata could make an
+      // omitted private file look like a deletion during a future restore.
+      const nextCommit = await writeCommit(next, tree, parent, unreadable);
       remapped.set(id, nextCommit);
       parent = nextCommit;
     }

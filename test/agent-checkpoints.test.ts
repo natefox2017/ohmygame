@@ -126,6 +126,7 @@ describe("AgentCheckpoints", () => {
   it("preserves Pi session snapshot objects while trimming legacy recovery history", async () => {
     const { project, file } = await fixture();
     const store = new CheckpointStore();
+    await mkdir(project.storagePath!, { recursive: true });
     const modern = await store.snapshot(project);
     const dir = path.join(project.storagePath!, "session");
     await mkdir(dir, { recursive: true });

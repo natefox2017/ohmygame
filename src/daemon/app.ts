@@ -1,8 +1,8 @@
 import { inspectPreviewConfiguration } from "./preview-configuration.js";
 import { CheckpointStore } from "./checkpoints.js";
-import { ProjectWrites } from "./project-writes.js";
+import { ProjectWrites, ProjectWriteError } from "./project-writes.js";
 import { registerCheckpointRoutes } from "./checkpoint-routes.js";
-import { readWorkspaceVersion } from "./workspace-notice.js";
+import { readWorkspaceVersion, writeWorkspaceNotice } from "./workspace-notice.js";
 import { withCanvasLock } from "./canvas-workspace.js";
 import { validatePreviewSettings } from "../shared/preview-settings.js";
 import { previewPageUrl } from "../shared/preview-page.js";
@@ -1601,34 +1601,70 @@ export function createApp(options: AppOptions = {}) {
     catch (cause) { return reply.code(500).send({ error: cause instanceof Error ? cause.message : String(cause) }); }
   });
 
-  const withCheckpointRestore = async <T,>(project: ProjectState, action: () => Promise<T>): Promise<T> => {
-    if (agents.isProjectBusy(project.id) || restoringProjects.has(project.id)
-      || (activeProjectWrites.get(project.id) ?? 0) > 0
-      || tools.jobs().some((job) => job.status === "running" && job.context?.projectId === project.id)) {
-      throw new CheckpointConflictError(["An Agent, generation job or workspace edit is still active"], ["An Agent, generation job or workspace edit is still active"]);
-    }
-    // The project might be open in a different window. Do not restore while an
-    // editor lease can still flush a stale buffer over the recovered files.
-    if (previews.hasActiveEditor(project)) {
-      throw new CheckpointConflictError(["Close the open project editor before restoring a version"], ["Close the open project editor before restoring a version"]);
-    }
-    restoringProjects.add(project.id);
+  const withCheckpointRestore = async <T extends { changed: string[] }>(
+    project: ProjectState, action: () => Promise<T>,
+  ): Promise<T> => {
+    const assertIdle = () => {
+      if (agents.isProjectBusy(project.id) || restoringProjects.has(project.id)
+        || (activeProjectWrites.get(project.id) ?? 0) > 0
+        || tools.jobs().some((job) => job.status === "running" && job.context?.projectId === project.id)) {
+        throw new CheckpointConflictError(
+          ["An Agent, generation job or workspace edit is still active"],
+          ["An Agent, generation job or workspace edit is still active"],
+        );
+      }
+      // An editor lease may write a stale buffer after a restore.
+      if (previews.hasActiveEditor(project)) {
+        throw new CheckpointConflictError(
+          ["Close the open project editor before restoring a version"],
+          ["Close the open project editor before restoring a version"],
+        );
+      }
+    };
+    assertIdle();
     let incomplete = false;
+    let notification: { version: string; changed: string[]; recovery?: boolean } | undefined;
     try {
-      await previews.stop(project, "settings");
-      const restored = await action();
-      await projects.touch(project.id);
-      agents.invalidateProjectSessions(project.id);
-      return restored;
-    } catch (cause) {
-      // An interrupted, partly rolled-back workspace is not safe to preview.
-      incomplete = cause instanceof CheckpointIncompleteError;
-      throw cause;
+      // Share the same exclusive write gate as conversation Undo/Reapply.
+      // This drains accepted editor writes and blocks new writes until restoration finishes.
+      return await projectWrites.exclusive(project.id, async () => {
+        assertIdle();
+        restoringProjects.add(project.id);
+        try {
+          await previews.stop(project, "settings");
+          const restored = await action();
+          const version = projectWrites.changed(project.id);
+          notification = { version, changed: restored.changed };
+          agents.invalidateProjectSessions(project.id);
+          await writeWorkspaceNotice(
+            project,
+            `The user restored a project checkpoint through the legacy recovery UI. Inspect the current files before continuing. Changed workspace paths: ${JSON.stringify(restored.changed)}.`,
+            version,
+          );
+          await projects.touch(project.id);
+          return restored;
+        } catch (cause) {
+          incomplete = cause instanceof CheckpointIncompleteError;
+          if (incomplete) {
+            const version = projectWrites.changed(project.id);
+            notification = { version, changed: [], recovery: true };
+            agents.invalidateProjectSessions(project.id);
+            // Never hide the interrupted recovery target when notice writing fails.
+            await writeWorkspaceNotice(
+              project,
+              "An interrupted workspace restoration requires recovery before any further edits.",
+              version,
+            ).catch((error) => app.log.error({ err: error, projectId: project.id }, "Failed to persist recovery notice"));
+          }
+          throw cause;
+        } finally {
+          restoringProjects.delete(project.id);
+        }
+      });
     } finally {
-      restoringProjects.delete(project.id);
-      // Explicitly allow automatic restart when an editor lease exists. Using
-      // changedOnly=true here meant a successful restore could leave a stopped
-      // preview indefinitely because its "dirty" flag was already cleared.
+      // Emit after releasing the exclusive lock so editors can reload safely.
+      if (notification) events.publish(project.id, "workspace.restored", notification);
+      // A partial restore must not launch a potentially corrupt workspace.
       if (!incomplete) void previews.automatic(project).catch(() => undefined);
     }
   };
@@ -1639,7 +1675,7 @@ export function createApp(options: AppOptions = {}) {
       if (!project) return reply.code(404).send({ error: "Project not found" });
       if (request.body?.confirm !== true || typeof request.body.turnId !== "string" || !request.body.turnId) return reply.code(400).send({ error: "Explicit confirmation and turnId are required" });
       try { return await withCheckpointRestore(project, () => legacyCheckpoints.undo(project, request.body.turnId)); }
-      catch (cause) { return reply.code(cause instanceof CheckpointConflictError || /finish|not found|Recover/i.test(String(cause)) ? 409 : 500).send({ error: cause instanceof Error ? cause.message : String(cause) }); }
+      catch (cause) { return reply.code(cause instanceof CheckpointConflictError || cause instanceof ProjectWriteError || /finish|not found|Recover/i.test(String(cause)) ? 409 : 500).send({ error: cause instanceof Error ? cause.message : String(cause) }); }
     },
   );
 
@@ -1649,7 +1685,7 @@ export function createApp(options: AppOptions = {}) {
       if (!project) return reply.code(404).send({ error: "Project not found" });
       if (request.body?.confirm !== true || typeof request.body.commit !== "string") return reply.code(400).send({ error: "Explicit confirmation and checkpoint ID are required" });
       try { return await withCheckpointRestore(project, () => legacyCheckpoints.restore(project, request.body.commit)); }
-      catch (cause) { return reply.code(cause instanceof CheckpointConflictError || /finish|not recorded|Invalid checkpoint/i.test(String(cause)) ? 409 : 500).send({ error: cause instanceof Error ? cause.message : String(cause) }); }
+      catch (cause) { return reply.code(cause instanceof CheckpointConflictError || cause instanceof ProjectWriteError || /finish|not recorded|Invalid checkpoint/i.test(String(cause)) ? 409 : 500).send({ error: cause instanceof Error ? cause.message : String(cause) }); }
     },
   );
 

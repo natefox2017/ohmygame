@@ -56,12 +56,14 @@ describe("provider groups", () => {
         summary("custom:ollama", { preset: "ollama" }),
         summary("deepseek"),
         summary("openai"),
+        summary("codex-app-server", { capabilities: ["image"] }),
       ],
       predicates,
     );
     expect(ids(groups.free)).toEqual(["cloud-hyper3d"]);
     expect(ids(groups.popular)).toEqual([
       "openai",
+      "codex-app-server",
       "openrouter",
       "deepseek",
       "tripo",

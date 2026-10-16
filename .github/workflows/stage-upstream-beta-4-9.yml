@@ -13,11 +13,11 @@ permissions:
 
 concurrency:
   group: upstream-beta-4-9-stage
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   stage:
-    runs-on: [self-hosted, linux, x64, grok-box]
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4

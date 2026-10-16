@@ -43,7 +43,7 @@ jobs:
             echo 'Desktop release tag trigger reactivated' >&2
             exit 1
           fi
-          test "$(grep -c 'if: \$\{\{ false \}\}' .github/workflows/release-desktop.yml)" -ge 2
+          test "$(grep -F 'if: ' .github/workflows/release-desktop.yml | grep -c 'false')" -ge 2
           grep -q 'codex-app-server' src/renderer/models-settings.tsx
           git status --short
           git show --stat --oneline --summary HEAD | tail -65
